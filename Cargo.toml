@@ -90,7 +90,7 @@ serde = "1.0.228"
 serde_yaml_ng = "0.10.0"
 socket2 = "0.6.4"
 thiserror = "2.0.17"
-time = { workspace = true }
+time = { version = "0.3.55", features = ["formatting"] }
 tokio = { version = "1.52.3", features = [
   "fs",
   "signal",
