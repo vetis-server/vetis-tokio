@@ -11,10 +11,11 @@ use vetis_macros::{http, security};
 #[cfg(feature = "http1")]
 #[tokio::test]
 async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
+
     let mut server = http!(
         from_crate => vetis_tokio,
         port => 60002,
-        protos => vec![default_protocol_version()],
+        protos => vec![http::Version::HTTP_11],
         handler => handler_fn(
             |_req| async move { Ok(Response::builder().text("Hello, World!")) }
         )
@@ -28,6 +29,7 @@ async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::builder().build();
 
     let response = get("http://localhost:60002")?
+        .version(http::Version::HTTP_11)
         .send_with(&client)
         .await?;
 
