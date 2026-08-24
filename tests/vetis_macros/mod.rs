@@ -11,7 +11,6 @@ use vetis_macros::{http, security};
 #[cfg(feature = "http1")]
 #[tokio::test]
 async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
-
     let mut server = http!(
         from_crate => vetis_tokio,
         port => 60002,
@@ -51,7 +50,7 @@ async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn test_https() -> Result<(), Box<dyn std::error::Error>> {
     let handler = handler_fn(|_req| async move { Ok(Response::builder().text("Hello, World!")) });
-    let root= env!("CARGO_MANIFEST_DIR");
+    let root = env!("CARGO_MANIFEST_DIR");
     let mut server = http!(
         from_crate => vetis_tokio,
         hostname => "localhost",
@@ -72,7 +71,8 @@ async fn test_https() -> Result<(), Box<dyn std::error::Error>> {
         .start()
         .await?;
 
-    let certificate = DeboaCertificate::from_file(&format!("{root}/certs/ca.der"), ContentEncoding::DER).await?;
+    let certificate =
+        DeboaCertificate::from_file(&format!("{root}/certs/ca.der"), ContentEncoding::DER).await?;
 
     let client = Client::builder()
         .certificate(certificate)

@@ -1,10 +1,15 @@
 use crate::{
-    host::{HostImpl, path::HandlerPath}, rt::Vetis, tests::default_protocol_version,
+    host::{path::HandlerPath, HostImpl},
+    rt::Vetis,
+    tests::default_protocol_version,
 };
 use http::StatusCode;
 use std::error::Error;
 use vetis::{
-    Response, VetisServer as _, host::{HostConfig, handler_fn}, listener::ListenerConfig, server::ServerConfig,
+    host::{handler_fn, HostConfig},
+    listener::ListenerConfig,
+    server::ServerConfig,
+    Response, VetisServer as _,
 };
 
 fn create_listener() -> ListenerConfig {
