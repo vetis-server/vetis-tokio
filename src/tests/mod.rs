@@ -1,14 +1,12 @@
 #![allow(unreachable_code, dead_code)]
-use ::http::Version;
+use http::Version;
 
-mod config;
+mod host;
 mod lib;
 mod paths;
-
 #[cfg(target_os = "linux")]
 mod server;
 
-mod host;
 mod tls;
 
 pub(crate) const CA_CERT: &[u8] = include_bytes!("../../certs/ca.der");
