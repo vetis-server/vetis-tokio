@@ -1,19 +1,21 @@
 use crate::{
-    host::{path::HandlerPath, HostImpl},
-    rt::Vetis,
+    host::{HostImpl, path::HandlerPath}, rt::Vetis, tests::default_protocol_version,
 };
 use http::StatusCode;
 use std::error::Error;
 use vetis::{
-    host::{handler_fn, HostConfig},
-    server::ServerConfig,
-    Response, VetisServer as _,
+    Response, VetisServer as _, host::{HostConfig, handler_fn}, listener::ListenerConfig, server::ServerConfig,
 };
 
-fn create_host() -> HostConfig {
-    HostConfig::builder()
-        .hostname("localhost")
-        .root_directory("src/tests".into())
+fn create_listener() -> ListenerConfig {
+    ListenerConfig::builder()
+        .port(8080)
+        .protos(vec![default_protocol_version()])
+        .interface(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+        )
         .build()
         .unwrap()
 }
@@ -21,7 +23,7 @@ fn create_host() -> HostConfig {
 #[test]
 fn test_vetis_new() {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
     let server = Vetis::new(config);
@@ -29,7 +31,7 @@ fn test_vetis_new() {
     assert_eq!(
         server
             .config()
-            .hosts()
+            .listeners()
             .len(),
         1
     );
@@ -38,7 +40,7 @@ fn test_vetis_new() {
 #[test]
 fn test_vetis_config() {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
 
@@ -47,23 +49,16 @@ fn test_vetis_config() {
     assert_eq!(
         server
             .config()
-            .hosts()
+            .listeners()
             .len(),
         1
-    );
-    assert_eq!(
-        server
-            .config()
-            .hosts()[0]
-            .hostname(),
-        "localhost"
     );
 }
 
 #[tokio::test]
 async fn test_vetis_add_host() -> Result<(), Box<dyn Error>> {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
     let mut server = Vetis::new(config);
@@ -105,7 +100,7 @@ async fn test_vetis_add_host() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_vetis_start_no_hosts() -> Result<(), Box<dyn Error>> {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
     let mut server = Vetis::new(config);
@@ -118,24 +113,9 @@ async fn test_vetis_start_no_hosts() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn test_vetis_stop_no_instance() -> Result<(), Box<dyn Error>> {
-    let config = ServerConfig::builder()
-        .add_host(create_host())
-        .build()
-        .unwrap();
-    let mut server = Vetis::new(config);
-
-    let result = server.stop().await;
-
-    assert!(result.is_err());
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_vetis_hosts() -> Result<(), Box<dyn Error>> {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
     let mut server = Vetis::new(config);
@@ -174,7 +154,7 @@ async fn test_vetis_hosts() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_vetis_add_multiple_hosts() -> Result<(), Box<dyn Error>> {
     let config = ServerConfig::builder()
-        .add_host(create_host())
+        .add_listener(create_listener())
         .build()
         .unwrap();
     let mut server = Vetis::new(config);

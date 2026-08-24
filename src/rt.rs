@@ -3,7 +3,7 @@ use http::Version;
 use log::{error, info};
 use std::{collections::HashMap, sync::Arc};
 use vetis::{
-    errors::{HostError, ListenerError, VetisError},
+    errors::{HostError, VetisError},
     host::{Host, HostConfig},
     listener::Listener,
     server::ServerConfig,
@@ -11,10 +11,10 @@ use vetis::{
 };
 
 #[derive(Default)]
-/// Main server instance that manages virtual hosts and listeners.
+/// Main server instance that manages hosts and listeners.
 ///
 /// The `Vetis` struct is the core of the VeTiS server. It handles:
-/// - Managing multiple virtual hosts
+/// - Managing multiple hosts
 /// - Coordinating server listeners
 /// - Starting and stopping the server
 /// - Signal handling for graceful shutdown
@@ -128,12 +128,12 @@ impl vetis::VetisServer for Vetis {
             .insert(Arc::from(host.hostname()), host);
     }
 
-    /// Remove a virtual host from the server
+    /// Remove a host from the server
     ///
     /// # Arguments
     ///
-    /// * `hostname` - The hostname of the virtual host to remove
-    /// * `port` - The port of the virtual host to remove
+    /// * `hostname` - The hostname of the host to remove
+    /// * `port` - The port of the host to remove
     ///
     /// # Examples
     ///
@@ -158,9 +158,9 @@ impl vetis::VetisServer for Vetis {
             .remove(&Arc::from(hostname));
     }
 
-    /// Returns a reference to the virtual hosts.
+    /// Returns a reference to the hosts.
     ///
-    /// This provides access to the virtual hosts configured when the server was created.
+    /// This provides access to the hosts configured when the server was created.
     fn hosts(&self) -> &VetisHosts<Self::Host> {
         &self.hosts
     }
@@ -176,14 +176,14 @@ impl vetis::VetisServer for Vetis {
     /// Starts the server and runs until interrupted.
     ///
     /// This method combines `start()` and graceful shutdown handling:
-    /// 1. Starts the server with all configured virtual hosts
+    /// 1. Starts the server with all configured hosts
     /// 2. Listens for shutdown signals (Ctrl+C on Tokio, SIGQUIT on Smol)
     /// 3. Stops the server gracefully
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No virtual hosts have been added
+    /// - No hosts have been added
     /// - Server fails to start
     /// - Server fails to stop
     ///
@@ -246,7 +246,7 @@ impl vetis::VetisServer for Vetis {
     ///     let config = ServerConfig::builder().build()?;
     ///     let mut server = Vetis::new(config);
     ///
-    ///     // Add virtual hosts...
+    ///     // Add hosts...
     ///
     ///     server.start().await?;
     ///
@@ -257,15 +257,6 @@ impl vetis::VetisServer for Vetis {
     /// }
     /// ```
     async fn start(&mut self) -> VetisResult<()> {
-        if self
-            .config
-            .listeners()
-            .is_empty()
-        {
-            error!("You must add at least one listener");
-            return Err(VetisError::Listener(ListenerError::NoListeners));
-        }
-
         if self
             .hosts
             .read()
@@ -346,6 +337,13 @@ impl vetis::VetisServer for Vetis {
     /// }
     /// ```
     async fn stop(&mut self) -> VetisResult<()> {
+        if self
+            .listeners
+            .is_empty()
+        {
+            return Err(VetisError::Stop("Vetis is not running".to_string()));
+        }
+
         for listener in &mut self.listeners {
             listener
                 .stop()
