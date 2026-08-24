@@ -74,6 +74,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "async-executor"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+dependencies = [
+ "async-task",
+ "concurrent-queue",
+ "fastrand",
+ "futures-lite",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
 name = "async-fn-stream"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -94,6 +108,12 @@ dependencies = [
  "event-listener-strategy",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "async-task"
+version = "4.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "atomic-waker"
@@ -439,9 +459,9 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "deboa"
-version = "0.1.3"
+version = "0.1.5-beta.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65089863049f2a5af354ebb36b9213f299b42d04c178962d273944154b5e4a04"
+checksum = "1e3ea2d0968fb1ada5f11bbe9b83e480db8ec44324662143e986dfa773917a1c"
 dependencies = [
  "async-lock",
  "base64",
@@ -468,16 +488,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "deboa-tokio"
-version = "0.1.3"
+name = "deboa-tls"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31b194c6676f41348a57a468b0ac429a2b120c39d95af3527c44bfe7280438a3"
+checksum = "79f9e92466ff70bad909706d2d2f0b3bc9bb81a1fedc8be1a3e3724d42a0e0f4"
 dependencies = [
+ "deboa",
+ "futures-rustls",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "webpki-roots",
+]
+
+[[package]]
+name = "deboa-tokio"
+version = "0.1.4-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db7f43406b4f0fe193d58db91e8a736330208568f4b4e17fdd4c719c6b6d90d0"
+dependencies = [
+ "async-executor",
  "async-lock",
  "base64",
  "bytes",
  "cookie",
  "deboa",
+ "deboa-tls",
+ "env_logger",
+ "futures-util",
  "hashbrown",
  "http",
  "http-body",
@@ -495,8 +533,6 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pki-types",
  "serde",
- "tackle",
- "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -737,7 +773,10 @@ version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f78e10609fe0e0b3f4157ffab1876319b5b0db102a2c60dc4626306dc46b44ad"
 dependencies = [
+ "fastrand",
  "futures-core",
+ "futures-io",
+ "parking",
  "pin-project-lite",
 ]
 
