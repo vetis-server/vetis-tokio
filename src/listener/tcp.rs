@@ -11,8 +11,7 @@ use hyper::server::conn::http1;
 use hyper::server::conn::http2;
 #[cfg(feature = "http2")]
 use hyper_util::rt::TokioExecutor;
-#[cfg(any(feature = "http1", feature = "http2"))]
-use hyper_util::rt::TokioIo;
+use hyper_util::{rt::TokioIo, server::conn::auto};
 use log::error;
 use peekable::tokio::AsyncPeekable;
 use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::Arc};
@@ -127,11 +126,11 @@ impl TcpListener {
             }
         };
 
-        #[cfg(feature = "http1")]
-        let http11_only = self
+        let allow_plain_connection = self
             .config
             .protos()
-            .contains(&Version::HTTP_11);
+            .iter()
+            .any(|v| *v == Version::HTTP_11 && *v == Version::HTTP_2);
 
         let tls_acceptor: TlsAcceptor = TlsAcceptor::from(Arc::new(tls_config));
         let future = async move {
@@ -208,23 +207,28 @@ impl TcpListener {
                         }
                     }
                 } else {
-                    // Insecure connections are only allowed for HTTP/1.1
-                    #[cfg(feature = "http1")]
+                    // Insecure connections are only allowed for HTTP/1.1 and 2
+                    #[cfg(any(feature = "http1", feature = "http2"))]
                     {
-                        if http11_only {
+                        if allow_plain_connection {
                             let service = HttpService::new(hosts.clone(), client_addr);
-                            tokio::spawn(
-                                http1::Builder::new()
-                                    .serve_connection(TokioIo::new(peekable), service),
-                            );
-                        } else {
-                            panic!("Unsupported protocol");
+                            tokio::spawn(async move {
+                                let result = auto::Builder::new(TokioExecutor::new())
+                                    .serve_connection_with_upgrades(TokioIo::new(peekable), service)
+                                    .await;
+                                match result {
+                                    Err(e) => {
+                                        error!("Error while processing request: {}", e.to_string())
+                                    }
+                                    Ok(()) => {}
+                                }
+                            });
                         }
                     }
 
-                    #[cfg(any(feature = "http2", feature = "http3"))]
+                    #[cfg(feature = "http3")]
                     {
-                        panic!("Insecure connections are only allowed with HTTP/1.1");
+                        panic!("Insecure connections are only allowed with HTTP/1.1 and H2 (H2C)");
                     }
                 }
             }

@@ -107,7 +107,7 @@ vetis = { version = "0.1.6", default-features = false }
 
 [dev-dependencies]
 deboa = { version = "0.1.5-beta.1" }
-deboa-tokio = { version = "0.1.4-beta.1", default-features = false, features = [
+deboa-tokio = { version = "0.1.4-beta.2", default-features = false, features = [
   "http1",
   "http2",
   #"http3",
