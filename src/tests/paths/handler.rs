@@ -1,5 +1,6 @@
 use crate::{
-    host::{path::HandlerPath, HostImpl},
+    host::{path::HandlerPath, Host},
+    listener::build_listeners,
     tests::{default_protocol_version, CA_CERT, SERVER_CERT, SERVER_KEY},
 };
 use deboa::{
@@ -13,7 +14,6 @@ use vetis::{
     host::{handler_fn, HostConfig},
     listener::ListenerConfig,
     security::SecurityConfig,
-    server::ServerConfig,
     VetisServer as _,
 };
 
@@ -42,12 +42,6 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
         .security(security_config)
         .build()?;
 
-    let mut server = crate::Vetis::new(
-        ServerConfig::builder()
-            .add_listener(ipv4)
-            .build()?,
-    );
-
     let root_path = HandlerPath::builder()
         .uri("/hello")
         .handler(handler_fn(|_request| async move {
@@ -58,13 +52,14 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    let mut host = HostImpl::new(host_config);
+    let mut host = Host::new(host_config);
 
     host.add_path(root_path);
 
-    server
-        .add_host(host)
-        .await;
+    let mut server = crate::Vetis::builder()
+        .add_listeners(build_listeners(ipv4))?
+        .add_host(host)?
+        .build();
 
     server
         .start()

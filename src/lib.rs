@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
-#[cfg(all(any(feature = "http2", feature = "http3"), not(feature = "rust-tls")))]
-compile_error!("http2 and http3 requires rust-tls!");
+#[cfg(all(feature = "http3", not(feature = "rust-tls")))]
+compile_error!("http3 requires rust-tls!");
 
 /// Host module
 pub mod host;
@@ -25,5 +25,5 @@ pub use vetis::{
     response::Response,
     security::SecurityConfig,
     server::ServerConfig,
-    VetisHosts, VetisRwLock,
+    VetisHosts,
 };

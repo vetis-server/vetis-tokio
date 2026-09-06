@@ -1,11 +1,7 @@
-use crate::{
-    host::HostImpl,
-    listener::{Listener, ListenerResult},
-    tls::TlsFactory,
-    VetisHosts, VetisRwLock,
-};
+use crate::{host::Host, listener::ListenerResult, tls::TlsFactory, VetisHosts};
 use bytes::Bytes;
 use futures_util::StreamExt;
+use genswap::GenSwap;
 use h3::server::{Connection, RequestResolver};
 use h3_quinn::{
     quinn::{self, crypto::rustls::QuicServerConfig},
@@ -18,7 +14,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 use vetis::{
     errors::{StartError, VetisError},
-    host::Host,
+    host::Host as _,
     listener::ListenerConfig,
     request::Request,
     Response, VetisResult,
@@ -28,7 +24,7 @@ use vetis::{
 pub struct UdpListener {
     config: ListenerConfig,
     task: Option<JoinHandle<()>>,
-    hosts: VetisHosts<HostImpl>,
+    hosts: VetisHosts<Host>,
 }
 
 impl UdpListener {
@@ -42,20 +38,50 @@ impl UdpListener {
     ///
     /// * `Self` - A new `UdpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { config, task: None, hosts: Arc::new(VetisRwLock::new(HashMap::new())) }
+        Self { config, task: None, hosts: VetisHosts::new(GenSwap::new(HashMap::new())) }
     }
 }
 
-impl Listener for UdpListener {
-    type Host = HostImpl;
+impl vetis::listener::Listener for UdpListener {
+    type RuntimeHost = Host;
 
-    /// Allow set virtual hosts
+    /// Add a new host
     ///
     /// # Arguments
     ///
-    /// * `hosts` - A `VetisHosts` instance containing the virtual hosts.
-    fn set_hosts(&mut self, hosts: VetisHosts<HostImpl>) {
-        self.hosts = hosts;
+    /// * `host` - A host instance.
+    fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
+        // Add a host
+        self.hosts
+            .rcu(|hosts| {
+                let mut new = HashMap::clone(&hosts);
+                new.insert(
+                    host.hostname()
+                        .into(),
+                    host.clone(),
+                );
+                new
+            });
+        Ok(())
+    }
+
+    /// Add a new host
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - A host instance.
+    fn remove_host(&mut self, _hostname: &str) -> VetisResult<()> {
+        // Add a host
+        Ok(())
+    }
+
+    fn total_hosts(&self) -> usize {
+        let guard = self.hosts.reader();
+        guard.cached().len()
+    }
+
+    fn config(&self) -> &ListenerConfig {
+        &self.config
     }
 
     /// Listen for incoming connections
@@ -115,7 +141,7 @@ impl UdpListener {
     async fn handle_connections(
         &mut self,
         endpoint: quinn::Endpoint,
-        hosts: VetisHosts<HostImpl>,
+        hosts: VetisHosts<Host>,
     ) -> Result<JoinHandle<()>, VetisError> {
         let task = tokio::spawn(async move {
             while let Some(new_conn) = endpoint
@@ -177,7 +203,7 @@ impl UdpListener {
 
 fn handle_http_request(
     resolver: RequestResolver<QuinnConnection, Bytes>,
-    hosts: VetisHosts<HostImpl>,
+    hosts: VetisHosts<Host>,
     client_addr: SocketAddr,
 ) -> VetisResult<()> {
     let hosts = hosts.clone();
@@ -200,8 +226,10 @@ fn handle_http_request(
             let hosts = hosts.clone();
             let response = if let Some(authority) = host {
                 debug!("Serving request for host: {}", authority);
-                let hosts = hosts.read().await;
-                let host = hosts.get(authority.host());
+                let mut cache = hosts.reader();
+                let host = cache
+                    .get()
+                    .get(authority.host());
                 let response = if let Some(host) = host {
                     let (parts, body) = request.into_parts();
                     let request = Request::from_parts(parts, body);

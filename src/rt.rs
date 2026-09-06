@@ -1,14 +1,105 @@
-use crate::{host::HostImpl, listener::ServerListener};
-use http::Version;
-use log::{error, info};
-use std::{collections::HashMap, sync::Arc};
+use crate::{host::Host, listener::Listener};
+use log::info;
+use std::sync::Arc;
 use vetis::{
-    errors::{HostError, VetisError},
-    host::{Host, HostConfig},
-    listener::Listener,
+    errors::{ListenerError, VetisError},
+    host::Host as _,
+    listener::Listener as _,
     server::ServerConfig,
-    VetisHosts, VetisResult, VetisRwLock,
+    VetisResult,
 };
+
+/// Builder for a vetis instance
+pub struct VetisBuilder {
+    pub(crate) listeners: Vec<Listener>,
+}
+
+impl VetisBuilder {
+    /// Adds listeners to the server.
+    pub fn add_listeners(mut self, listeners: Vec<Listener>) -> VetisResult<Self> {
+        self.listeners
+            .extend(listeners);
+        Ok(self)
+    }
+
+    /// Adds a host to the server.
+    ///
+    /// Hosts allow you to handle multiple domains on a single server instance.
+    /// Each host is identified by its domain name.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - A type implementing the `Host` trait
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use http::StatusCode;
+    /// use vetis::{
+    ///     server::ServerConfig,
+    ///     host::{path::Path, handler_fn, HostConfig},
+    ///     VetisServer as _
+    /// };
+    /// use vetis_tokio::{Vetis, host::{Host, path::HandlerPath}};
+    ///
+    /// let host_config = HostConfig::builder()
+    ///     .hostname("example.com")
+    ///     .port(80)
+    ///     .build()?;
+    ///
+    /// let mut host = Host::new(host_config);
+    ///
+    /// let mut root_path = HandlerPath::builder()
+    ///     .uri("/")
+    ///     .handler(handler_fn(|request| async move {
+    ///         let response = vetis::Response::builder()
+    ///             .status(StatusCode::OK)
+    ///             .text("Hello, World!");
+    ///         Ok(response)
+    ///     }))
+    ///     .build()?;
+    ///
+    /// vhost.add_path(root_path);
+    /// let server = Vetis::builder()
+    ///     .add_listener(listener)
+    ///     .add_host(vhost);
+    ///
+    /// Ok::<(), vetis::errors::VetisError>(())
+    /// ```
+    pub fn add_host(mut self, host: Host) -> VetisResult<Self> {
+        if self
+            .listeners
+            .is_empty()
+        {
+            return Err(VetisError::Listener(ListenerError::NoListeners));
+        }
+
+        let host = Arc::new(host);
+        for bind_address in host
+            .config()
+            .bind_addresses()
+        {
+            let mut listeners = self
+                .listeners
+                .iter_mut()
+                .filter(|listener| {
+                    let config = listener.config();
+                    *config.interface() == bind_address.0 && config.port() == bind_address.1
+                });
+
+            while let Some(listener) = listeners.next() {
+                listener.add_host(host.clone())?;
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Build a new vetis instance
+    pub fn build(self) -> Vetis {
+        Vetis { config: ServerConfig::default(), listeners: self.listeners }
+    }
+}
 
 #[derive(Default)]
 /// Main server instance that manages hosts and listeners.
@@ -30,7 +121,7 @@ use vetis::{
 ///     let config = ServerConfig::builder().build()?;
 ///     let mut server = Vetis::new(config);
 ///
-///     // Add virtual hosts...
+///     // Add hosts...
 ///
 ///     server.run().await?;
 ///     Ok(())
@@ -38,8 +129,7 @@ use vetis::{
 /// ```
 pub struct Vetis {
     config: ServerConfig,
-    hosts: VetisHosts<HostImpl>,
-    listeners: Vec<ServerListener>,
+    pub(crate) listeners: Vec<Listener>,
 }
 
 impl Vetis {
@@ -61,116 +151,42 @@ impl Vetis {
     /// Ok::<(), vetis::errors::VetisError>(())
     /// ```
     pub fn new(config: ServerConfig) -> Vetis {
-        Vetis { config, hosts: Arc::new(VetisRwLock::new(HashMap::new())), listeners: Vec::new() }
+        Vetis { config, listeners: Vec::new() }
+    }
+
+    /// Create a new vetis instance builder
+    pub fn builder() -> VetisBuilder {
+        VetisBuilder { listeners: Vec::new() }
+    }
+}
+
+impl From<Vec<Listener>> for Vetis {
+    fn from(value: Vec<Listener>) -> Self {
+        Vetis { config: ServerConfig::default(), listeners: value }
     }
 }
 
 impl vetis::VetisServer for Vetis {
-    /// Virtual host type
-    type Host = HostImpl;
-    /// Virtual host configuration type
-    type HostConfig = HostConfig;
-
-    /// Adds a host to the server.
-    ///
-    /// Virtual hosts allow you to host multiple domains on a single server instance.
-    /// Each host is identified by its hostname.
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - A type implementing the `Host` trait
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use http::StatusCode;
-    ///
-    /// use vetis::{
-    ///     server::ServerConfig,
-    ///     host::{path::Path, handler_fn, HostConfig},
-    ///     VetisServer as _
-    /// };
-    ///
-    /// use vetis_tokio::{Vetis, host::{HostImpl, path::HandlerPath}};
-    ///
-    /// let config = ServerConfig::builder().build()?;
-    /// let mut server = Vetis::new(config);
-    ///
-    /// let host_config = HostConfig::builder()
-    ///     .hostname("example.com")
-    ///     .port(80)
-    ///     .build()?;
-    ///
-    /// let mut host = HostImpl::new(host_config);
-    ///
-    /// let mut root_path = HandlerPath::builder()
-    ///     .uri("/")
-    ///     .handler(handler_fn(|request| async move {
-    ///         let response = vetis::Response::builder()
-    ///             .status(StatusCode::OK)
-    ///             .text("Hello, World!");
-    ///         Ok(response)
-    ///     }))
-    ///     .build()?;
-    ///
-    /// vhost.add_path(root_path);
-    ///
-    /// async move {
-    ///     server.add_host(vhost).await;
-    /// };
-    ///
-    /// Ok::<(), vetis::errors::VetisError>(())
-    /// ```
-    async fn add_host(&mut self, host: Self::Host) {
-        self.hosts
-            .write()
-            .await
-            .insert(Arc::from(host.hostname()), host);
-    }
-
-    /// Remove a host from the server
-    ///
-    /// # Arguments
-    ///
-    /// * `hostname` - The hostname of the host to remove
-    /// * `port` - The port of the host to remove
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use vetis::VetisServer as _;
-    /// use vetis_tokio::Vetis;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let config = vetis::server::ServerConfig::builder().build()?;
-    ///     let mut server = Vetis::new(config);
-    ///
-    ///     server.remove_host("example.com", 80).await;
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    async fn remove_host(&mut self, hostname: &str) {
-        self.hosts
-            .write()
-            .await
-            .remove(&Arc::from(hostname));
-    }
-
-    /// Returns a reference to the hosts.
-    ///
-    /// This provides access to the hosts configured when the server was created.
-    fn hosts(&self) -> &VetisHosts<Self::Host> {
-        &self.hosts
-    }
+    /// Listener type
+    type RuntimeListener = Listener;
+    /// Host type
+    type RuntimeHost = Host;
 
     /// Returns a reference to the server configuration.
     ///
-    /// This provides access to the listeners and global settings
+    /// This method provides access to the listeners and global settings
     /// configured when the server was created.
     fn config(&self) -> &ServerConfig {
         &self.config
+    }
+
+    /// Returns a mut reference to the server configuration.
+    ///
+    /// This method provides access to the listeners and global settings
+    /// configured when the server was created, allowing them to
+    /// be modified.
+    fn config_mut(&mut self) -> &mut ServerConfig {
+        &mut self.config
     }
 
     /// Starts the server and runs until interrupted.
@@ -207,12 +223,35 @@ impl vetis::VetisServer for Vetis {
     async fn run(&mut self) -> VetisResult<()> {
         self.start().await?;
 
-        for listener in self
-            .config
-            .listeners()
-        {
-            info!("Server listening on port {}:{}", listener.interface(), listener.port());
-        }
+        let addresses = self
+            .listeners
+            .iter()
+            .fold(String::new(), |mut acc, listener| {
+                let net_proto = match listener {
+                    Listener::Tcp(_) => "[TCP]",
+                    #[cfg(feature = "http3")]
+                    Listener::Udp(_) => "[UDP]",
+                };
+                acc.push_str(net_proto);
+                acc.push(' ');
+                acc.push_str(
+                    &listener
+                        .config()
+                        .interface()
+                        .to_string(),
+                );
+                acc.push(':');
+                acc.push_str(
+                    &listener
+                        .config()
+                        .port()
+                        .to_string(),
+                );
+                acc.push(' ');
+                acc
+            });
+
+        info!("Server listening on: {}", addresses);
 
         let _ = tokio::signal::ctrl_c().await;
 
@@ -258,53 +297,17 @@ impl vetis::VetisServer for Vetis {
     /// ```
     async fn start(&mut self) -> VetisResult<()> {
         if self
-            .hosts
-            .read()
-            .await
+            .listeners
             .is_empty()
         {
-            error!("You must add at least one host");
-            return Err(VetisError::Host(HostError::NoHosts));
+            return Err(VetisError::Listener(ListenerError::NoListeners));
         }
 
-        for listener_config in self
-            .config
-            .listeners()
-        {
-            #[cfg(any(feature = "http1", feature = "http2"))]
-            if listener_config
-                .protos()
-                .iter()
-                .any(|proto| *proto == Version::HTTP_11 || *proto == Version::HTTP_2)
-            {
-                use crate::listener::tcp::TcpListener;
-                use vetis::listener::Listener as _;
-                let mut listener: ServerListener = TcpListener::new(listener_config.clone()).into();
-                listener.set_hosts(self.hosts.clone());
-                listener
-                    .listen()
-                    .await?;
-                self.listeners
-                    .push(listener);
-            }
-
-            #[cfg(feature = "http3")]
-            if listener_config
-                .protos()
-                .contains(&Version::HTTP_3)
-            {
-                use crate::listener::udp::UdpListener;
-                use vetis::listener::Listener as _;
-                let mut listener: ServerListener = UdpListener::new(listener_config.clone()).into();
-                listener.set_hosts(self.hosts.clone());
-                listener
-                    .listen()
-                    .await?;
-                self.listeners
-                    .push(listener);
-            }
+        for listener in &mut self.listeners {
+            listener
+                .listen()
+                .await?;
         }
-
         Ok(())
     }
 
@@ -371,11 +374,7 @@ impl vetis::VetisServer for Vetis {
     ///     Ok(())
     /// }
     /// ```
-    async fn reload(
-        &mut self,
-        _new_config: ServerConfig,
-        _new_hosts: Vec<Self::HostConfig>,
-    ) -> VetisResult<()> {
+    async fn reload(&mut self, _new_config: ServerConfig) -> VetisResult<()> {
         Ok(())
     }
 }

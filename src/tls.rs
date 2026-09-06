@@ -1,4 +1,4 @@
-use crate::host::HostImpl;
+use crate::host::Host;
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},
     server::ResolvesServerCertUsingSni,
@@ -8,7 +8,7 @@ use rustls::{
 use std::sync::Arc;
 use vetis::{
     errors::{StartError, VetisError},
-    host::Host,
+    host::Host as _,
     VetisHosts,
 };
 
@@ -16,7 +16,7 @@ pub struct TlsFactory {}
 
 impl TlsFactory {
     pub async fn create_tls_config(
-        hosts: VetisHosts<HostImpl>,
+        hosts: VetisHosts<Host>,
         alpn_protocols: Vec<Vec<u8>>,
     ) -> Result<Option<ServerConfig>, VetisError> {
         let hosts = hosts.clone();
@@ -25,8 +25,11 @@ impl TlsFactory {
         #[cfg(feature = "__rustls_ring")]
         let provider = rustls::crypto::ring::default_provider();
         let mut resolver = ResolvesServerCertUsingSni::new();
-        let hosts = hosts.read().await;
-        for (hostname, host) in hosts.iter() {
+        for (hostname, host) in hosts
+            .reader()
+            .get()
+            .iter()
+        {
             if let Some(security) = host
                 .config()
                 .security()
@@ -47,7 +50,9 @@ impl TlsFactory {
                     VetisError::Tls(format!("Failed to create certified key: {}", e))
                 })?;
 
-                let hostname = hostname.clone();
+                let (hostname, _) = hostname
+                    .rsplit_once(':')
+                    .unwrap_or_else(|| (hostname, "443"));
 
                 resolver
                     .add(&hostname, certified_key)
@@ -58,6 +63,9 @@ impl TlsFactory {
         let builder = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(rustls::ALL_VERSIONS)
             .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
+
+        // TODO: Add client verification (mTLS)
+        // TODO: Possibly add some sort of hook for client certificate custom verification
 
         let mut tls_config = builder
             .with_no_client_auth()

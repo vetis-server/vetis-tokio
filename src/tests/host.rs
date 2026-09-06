@@ -1,8 +1,8 @@
-use crate::host::{path::HandlerPath, HostImpl};
+use crate::host::{path::HandlerPath, Host};
 use http::StatusCode;
 use http_body_util::BodyExt;
 use hyper_body_utils::HttpBody;
-use vetis::host::{handler_fn, Host, HostConfig};
+use vetis::host::{handler_fn, Host as _, HostConfig};
 
 #[tokio::test]
 async fn test_add_host() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +12,7 @@ async fn test_add_host() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
-    let mut host = HostImpl::new(config);
+    let mut host = Host::new(config);
     host.add_path(
         HandlerPath::builder()
             .uri("/")
@@ -42,7 +42,7 @@ async fn test_handle_request() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
-    let mut host = HostImpl::new(config);
+    let mut host = Host::new(config);
     host.add_path(
         HandlerPath::builder()
             .uri("/")

@@ -8,13 +8,13 @@ use std::net::Ipv4Addr;
 use vetis::{host::handler_fn, Response, VetisServer as _};
 use vetis_macros::{http, security};
 
-#[cfg(feature = "http1")]
 #[tokio::test]
 async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
     let mut server = http!(
         from_crate => vetis_tokio,
         port => 60002,
         protos => vec![http::Version::HTTP_11],
+        allow_unsafe_conn => true,
         handler => handler_fn(
             |_req| async move { Ok(Response::builder().text("Hello, World!")) }
         )
@@ -25,7 +25,9 @@ async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
         .start()
         .await?;
 
-    let client = Client::builder().build();
+    let client = Client::builder()
+        .prior_knowledge(true)
+        .build();
 
     let response = get("http://localhost:60002")?
         .version(http::Version::HTTP_11)

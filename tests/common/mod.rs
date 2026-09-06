@@ -10,7 +10,6 @@ pub(crate) const IP6_SERVER_CERT: &[u8] = include_bytes!("../../certs/ip6-server
 pub(crate) const IP6_SERVER_KEY: &[u8] = include_bytes!("../../certs/ip6-server.key.der");
 
 pub(crate) const fn default_protocol_version() -> Version {
-    #[cfg(feature = "http1")]
     return Version::HTTP_11;
     #[cfg(feature = "http2")]
     return Version::HTTP_2;

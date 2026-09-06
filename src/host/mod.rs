@@ -1,6 +1,6 @@
-//! Virtual host module
+//! Host module
 //!
-//! This module provides functionality for creating and managing virtual hosts,
+//! This module provides functionality for creating and managing hosts,
 //! including path routing and request handling.
 use futures_util::TryStreamExt;
 use http::StatusCode;
@@ -10,27 +10,32 @@ use hyper_body_utils::HttpBody;
 use radix_trie::Trie;
 use std::sync::Arc;
 use tokio::fs::File;
+use tokio_util::io::ReaderStream;
 use vetis::{
     errors::{FileError, HostError, VetisError},
-    host::{path::Path, Host, HostConfig},
+    host::{path::Path, HostConfig},
     Request, Response, VetisFutureResult,
 };
 
 pub mod path;
 
-/// Virtual host structure
-pub struct HostImpl {
+/// Host type
+pub struct Host {
     config: HostConfig,
     paths: Trie<String, Arc<Box<dyn Path>>>,
 }
 
-impl Host for HostImpl {
-    fn paths(&self) -> Trie<String, Arc<Box<dyn vetis::host::path::Path>>> {
+impl vetis::host::Host for Host {
+    fn paths(&self) -> Trie<String, Arc<Box<dyn Path>>> {
         self.paths.clone()
     }
 
     fn config(&self) -> &HostConfig {
         &self.config
+    }
+
+    fn config_mut(&mut self) -> &mut HostConfig {
+        &mut self.config
     }
 
     fn serve_status_page<'a>(&'a self, status: u16) -> VetisFutureResult<'a, Response> {
@@ -65,8 +70,7 @@ impl Host for HostImpl {
                         if dir.exists() {
                             let result = File::open(file).await;
                             if let Ok(data) = result {
-                                let content =
-                                    tokio_util::io::ReaderStream::new(data).map_ok(Frame::data);
+                                let content = ReaderStream::new(data).map_ok(Frame::data);
                                 let body = StreamBody::new(content);
                                 return Ok(Response::builder()
                                     .status(status_code)
@@ -104,15 +108,12 @@ impl Host for HostImpl {
         }
 
         let paths = self.paths();
-
         let matches = paths.get_ancestor_value(&uri_path);
-
         let Some(path) = matches else {
             return self.serve_status_page(http::StatusCode::NOT_FOUND.as_u16());
         };
 
         let path = path.clone();
-
         let target_path: String = uri_path
             .strip_prefix(path.uri())
             .unwrap_or(&uri_path)
@@ -154,12 +155,12 @@ impl Host for HostImpl {
     }
 }
 
-impl HostImpl {
-    /// Create a new virtual host
+impl Host {
+    /// Create a new host
     ///
     /// # Arguments
     ///
-    /// * `host_config` - A `HostConfig` instance containing the virtual host configuration.
+    /// * `host_config` - A `HostConfig` instance containing the host configuration.
     ///
     /// # Returns
     ///
@@ -168,7 +169,7 @@ impl HostImpl {
         Self { config: host_config, paths: Trie::new() }
     }
 
-    /// Add a path to the virtual host
+    /// Add a path to the host
     ///
     /// # Arguments
     ///
