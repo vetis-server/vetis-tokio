@@ -40,11 +40,20 @@ impl VetisBuilder {
     ///     host::{path::Path, handler_fn, HostConfig},
     ///     VetisServer as _
     /// };
-    /// use vetis_tokio::{Vetis, host::{Host, path::HandlerPath}};
+    /// use vetis_tokio::{
+    ///     host::{Host, path::HandlerPath,
+    ///     listener::build_listeners,
+    ///     Vetis,
+    /// }};
     ///
     /// let host_config = HostConfig::builder()
     ///     .hostname("example.com")
-    ///     .port(80)
+    ///     .bind_addresses(vec![(
+    ///         "0.0.0.0"
+    ///             .parse()
+    ///             .unwrap(),
+    ///         80,
+    ///     )])
     ///     .build()?;
     ///
     /// let mut host = Host::new(host_config);
@@ -61,8 +70,9 @@ impl VetisBuilder {
     ///
     /// vhost.add_path(root_path);
     /// let server = Vetis::builder()
-    ///     .add_listener(listener)
-    ///     .add_host(vhost);
+    ///     .add_listeners(build_listeners(ipv4))?
+    ///     .add_host(vhost)?
+    ///     .build();
     ///
     /// Ok::<(), vetis::errors::VetisError>(())
     /// ```

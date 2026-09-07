@@ -39,12 +39,13 @@ use vetis::{
 use vetis_macros::status_pages;
 use vetis_tokio::{
     host::{path::HandlerPath, Host},
+    listener::build_listeners,
     Vetis,
 };
 
-pub(crate) const CA_CERT: &[u8] = include_bytes!("../../certs/ca.der");
-pub(crate) const SERVER_CERT: &[u8] = include_bytes!("../../certs/server.der");
-pub(crate) const SERVER_KEY: &[u8] = include_bytes!("../../certs/server.key.der");
+pub(crate) const CA_CERT: &[u8] = include_bytes!("../certs/ca.der");
+pub(crate) const SERVER_CERT: &[u8] = include_bytes!("../certs/server.der");
+pub(crate) const SERVER_KEY: &[u8] = include_bytes!("../certs/server.key.der");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,11 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let https = ListenerConfig::builder()
         .port(8443)
         .protos(vec![Version::HTTP_11])
-        .interface("0.0.0.0")
-        .build()?;
-
-    let config = ServerConfig::builder()
-        .add_listener(https)
+        .interface("0.0.0.0".parse().unwrap())
         .build()?;
 
     let security_config = SecurityConfig::builder()
@@ -69,10 +66,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
         .security(security_config)
-        .root_directory("/home/rogerio/Downloads")
+        .root_directory("/home/rogerio/Downloads".into())
+        .bind_addresses(vec![(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            8443,
+        )])
         .status_pages(status_pages! {
-            404 => "404.html".to_string(),
-            500 => "500.html".to_string(),
+            404 @ "404.html".to_string(),
+            500 @ "500.html".to_string(),
         })
         .build()?;
 
@@ -102,10 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     localhost_host.add_path(health_path);
 
-    let mut server = Vetis::new(config);
-    server
-        .add_host(localhost_host)
-        .await;
+    let mut server = Vetis::builder;
+        .add_listeners(build_listeners(https))?
+        .add_host(localhost_host)?
+        .build();
 
     server.run().await?;
 
