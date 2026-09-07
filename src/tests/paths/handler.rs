@@ -40,6 +40,12 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
         .hostname("localhost")
         .root_directory("src/tests".into())
         .security(security_config)
+        .bind_addresses(vec![(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            port,
+        )])
         .build()?;
 
     let root_path = HandlerPath::builder()

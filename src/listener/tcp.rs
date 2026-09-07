@@ -64,14 +64,21 @@ impl vetis::listener::Listener for TcpListener {
     /// # Arguments
     ///
     /// * `host` - A host instance.
-    fn remove_host(&mut self, _hostname: &str) -> VetisResult<()> {
-        todo!();
+    fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
+        self.hosts
+            .rcu(|hosts| {
+                let mut hosts = HashMap::clone(&hosts);
+                hosts.remove(hostname);
+                hosts
+            });
         Ok(())
     }
 
     fn total_hosts(&self) -> usize {
-        let guard = self.hosts.reader();
-        guard.cached().len()
+        let guard = self
+            .hosts
+            .load_full();
+        guard.len()
     }
 
     fn config(&self) -> &ListenerConfig {

@@ -23,8 +23,8 @@ eula = false
 
 [features]
 default = [
-  #"http2",
-  "http3",
+  "http2",
+  #"http3",
   "rust-tls"
 ]
 

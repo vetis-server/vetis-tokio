@@ -68,6 +68,12 @@ async fn test_vetis_add_host() -> Result<(), Box<dyn Error>> {
     let vhost_config = HostConfig::builder()
         .hostname("localhost")
         .root_directory("src/tests".into())
+        .bind_addresses(vec![(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            8080,
+        )])
         .build()?;
 
     let mut vhost = Host::new(vhost_config);
@@ -112,6 +118,12 @@ async fn test_vetis_hosts() -> Result<(), Box<dyn Error>> {
     let vhost_config = HostConfig::builder()
         .hostname("localhost")
         .root_directory("src/tests".into())
+        .bind_addresses(vec![(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            8080,
+        )])
         .build()?;
 
     let mut vhost = Host::new(vhost_config);
@@ -152,6 +164,12 @@ async fn test_vetis_add_multiple_hosts() -> Result<(), Box<dyn Error>> {
         let vhost_config = HostConfig::builder()
             .hostname(&format!("host{}", i))
             .root_directory("src/tests".into())
+            .bind_addresses(vec![(
+                "0.0.0.0"
+                    .parse()
+                    .unwrap(),
+                8080,
+            )])
             .build()?;
 
         let mut vhost = Host::new(vhost_config);
