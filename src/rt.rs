@@ -41,7 +41,7 @@ impl VetisBuilder {
     ///     VetisServer as _
     /// };
     /// use vetis_tokio::{
-    ///     host::{Host, path::HandlerPath,
+    ///     host::{Host, path::HandlerPath},
     ///     listener::build_listeners,
     ///     Vetis,
     /// }};
@@ -68,10 +68,10 @@ impl VetisBuilder {
     ///     }))
     ///     .build()?;
     ///
-    /// vhost.add_path(root_path);
+    /// host.add_path(root_path);
     /// let server = Vetis::builder()
     ///     .add_listeners(build_listeners(ipv4))?
-    ///     .add_host(vhost)?
+    ///     .add_host(host)?
     ///     .build();
     ///
     /// Ok::<(), vetis::errors::VetisError>(())
