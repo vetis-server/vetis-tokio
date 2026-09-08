@@ -1,6 +1,6 @@
 [package]
 name = "vetis-tokio"
-version = "0.1.2-beta.2"
+version = "0.1.2-beta.3"
 authors = ["Rogerio Araújo <rogerio.araujo@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/vetis-server/vetis-tokio"

@@ -2697,7 +2697,7 @@ dependencies = [
 
 [[package]]
 name = "vetis-tokio"
-version = "0.1.2-beta.2"
+version = "0.1.2-beta.3"
 dependencies = [
  "base64",
  "bytes",

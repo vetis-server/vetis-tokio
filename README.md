@@ -66,7 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
         .security(security_config)
-        .root_directory("/home/rogerio/Downloads".into())
         .bind_addresses(vec![(
             "0.0.0.0"
                 .parse()
