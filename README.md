@@ -27,7 +27,7 @@ vetis = { version = "0.1.0" }
 
 Here's how simple it is to create a web server with VeTiS:
 
-```rust
+```rust, no_run
 use http::Version;
 use hyper::StatusCode;
 use vetis::{
@@ -49,8 +49,6 @@ pub(crate) const SERVER_KEY: &[u8] = include_bytes!("../certs/server.key.der");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
-
     let https = ListenerConfig::builder()
         .port(8443)
         .protos(vec![Version::HTTP_11])
