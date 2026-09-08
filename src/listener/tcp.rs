@@ -1,5 +1,4 @@
 use crate::{host::Host, listener::ListenerResult, tls::TlsFactory, VetisHosts};
-use genswap::GenSwap;
 use http::Version;
 use hyper::server::conn::http1;
 #[cfg(feature = "http2")]
@@ -9,8 +8,9 @@ use hyper_util::{
     server::conn::auto,
 };
 use log::error;
+use papaya::HashMap;
 use peekable::tokio::AsyncPeekable;
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{borrow::Cow, net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use vetis::{
@@ -36,7 +36,7 @@ impl TcpListener {
     ///
     /// * `Self` - A new `TcpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { task: None, config, hosts: VetisHosts::new(GenSwap::new(HashMap::new())) }
+        Self { task: None, config, hosts: VetisHosts::new(HashMap::new()) }
     }
 }
 
@@ -50,12 +50,10 @@ impl vetis::listener::Listener for TcpListener {
     /// * `host` - A host instance.
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
-        self.hosts
-            .rcu(|hosts| {
-                let mut hosts = HashMap::clone(&hosts);
-                hosts.insert(format!("{}:{}", host.hostname(), self.config().port()), host.clone());
-                hosts
-            });
+        let hosts = self
+            .hosts
+            .pin_owned();
+        hosts.insert(format!("{}:{}", host.hostname(), self.config().port()), host.clone());
         Ok(())
     }
 
@@ -65,20 +63,15 @@ impl vetis::listener::Listener for TcpListener {
     ///
     /// * `host` - A host instance.
     fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
-        self.hosts
-            .rcu(|hosts| {
-                let mut hosts = HashMap::clone(&hosts);
-                hosts.remove(hostname);
-                hosts
-            });
+        let hosts = self
+            .hosts
+            .pin_owned();
+        hosts.remove(hostname);
         Ok(())
     }
 
     fn total_hosts(&self) -> usize {
-        let guard = self
-            .hosts
-            .load_full();
-        guard.len()
+        self.hosts.len()
     }
 
     fn config(&self) -> &ListenerConfig {

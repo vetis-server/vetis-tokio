@@ -90,6 +90,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcshift"
+version = "0.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed00e6d5ac3ff26dc77b7733e37e364e5178a0e529487a74b4a4e013f18ce3e3"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -907,15 +913,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "genswap"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9ac36be94ae8945d40489a3501c98fde3f59bd8c8ed1767c17ada3b2fdb347c"
-dependencies = [
- "arc-swap",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1563,6 +1560,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "papaya"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da2442474a9404698c42509b8967f437249dbc7b50493e83020333d3943ec0ae"
+dependencies = [
+ "equivalent",
+ "seize",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2070,6 +2077,16 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "seize"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2639,21 +2656,22 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vetis"
-version = "0.1.7-beta.1"
+version = "0.1.7-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04de77fcedcadc604a366ac1df0dd3185981b706ebf5dad45f4de797fba33d16"
+checksum = "de08965e87aaa935953d5a99f12851c7df47483b1e149b24fba8a6e585452d90"
 dependencies = [
  "arc-swap",
+ "arcshift",
  "async-lock",
  "bytes",
  "futures-util",
- "genswap",
  "http",
  "http-body-util",
  "http-serde-ext",
  "hyper",
  "hyper-body-utils",
  "log",
+ "papaya",
  "radix_trie",
  "rand",
  "serde",
@@ -2679,7 +2697,7 @@ dependencies = [
 
 [[package]]
 name = "vetis-tokio"
-version = "0.1.2-beta.1"
+version = "0.1.2-beta.2"
 dependencies = [
  "base64",
  "bytes",
@@ -2691,7 +2709,6 @@ dependencies = [
  "futures-lite",
  "futures-rustls",
  "futures-util",
- "genswap",
  "h3",
  "h3-quinn",
  "http",
@@ -2701,6 +2718,7 @@ dependencies = [
  "hyper-util",
  "log",
  "mimalloc",
+ "papaya",
  "peekable",
  "quinn",
  "radix_trie",

@@ -39,8 +39,10 @@ fn create_test_hosts() -> VetisHosts<Host> {
             .unwrap(),
     );
 
-    let mut hosts = std::collections::HashMap::new();
-    hosts.insert("localhost".into(), host.into());
+    let hosts = papaya::HashMap::new();
+    hosts
+        .pin_owned()
+        .insert("localhost".into(), host.into());
 
     VetisHosts::new(hosts.into())
 }
@@ -66,9 +68,10 @@ fn create_test_hosts_no_security() -> VetisHosts<Host> {
             .unwrap(),
     );
 
-    let mut hosts = std::collections::HashMap::new();
-    hosts.insert("localhost".into(), host.into());
-
+    let hosts = papaya::HashMap::new();
+    hosts
+        .pin_owned()
+        .insert("localhost".into(), host.into());
     VetisHosts::new(hosts.into())
 }
 
@@ -100,9 +103,10 @@ fn create_test_hosts_invalid_key() -> VetisHosts<Host> {
             .unwrap(),
     );
 
-    let mut hosts = std::collections::HashMap::new();
-    hosts.insert("localhost".into(), host.into());
-
+    let hosts = papaya::HashMap::new();
+    hosts
+        .pin()
+        .insert("localhost".into(), host.into());
     VetisHosts::new(hosts.into())
 }
 
@@ -190,8 +194,6 @@ async fn test_create_tls_config_empty_alpn() {
 }
 
 async fn do_create_tls_config_multiple_hosts() {
-    let mut hosts = std::collections::HashMap::new();
-
     // Create first virtual host with security
     let security_config1 = SecurityConfig::builder()
         .cert_from_bytes(SERVER_CERT.to_vec())
@@ -241,8 +243,11 @@ async fn do_create_tls_config_multiple_hosts() {
             .unwrap(),
     );
 
-    hosts.insert("localhost".into(), host1.into());
-    hosts.insert("test.com".into(), host2.into());
+    let hosts = papaya::HashMap::new();
+    let guard = hosts.pin_owned();
+    guard.insert("localhost".into(), host1.into());
+    guard.insert("test.com".into(), host2.into());
+    drop(guard);
 
     let alpn_protocols = vec![b"h2".to_vec()];
 

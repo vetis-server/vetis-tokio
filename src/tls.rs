@@ -26,8 +26,7 @@ impl TlsFactory {
         let provider = rustls::crypto::ring::default_provider();
         let mut resolver = ResolvesServerCertUsingSni::new();
         for (hostname, host) in hosts
-            .reader()
-            .get()
+            .pin_owned()
             .iter()
         {
             if let Some(security) = host

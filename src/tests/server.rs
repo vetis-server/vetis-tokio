@@ -147,7 +147,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
     let host = if cfg!(windows) { "localhost" } else { "ip6-localhost" };
 
     let ipv4 = create_listener(
-        55000,
+        65000,
         "0.0.0.0"
             .parse()
             .unwrap(),
@@ -155,7 +155,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
     )?;
 
     let ipv6 = create_listener(
-        55001,
+        65001,
         "::".parse()
             .unwrap(),
         false,
@@ -188,7 +188,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
             "0.0.0.0"
                 .parse()
                 .unwrap(),
-            55000,
+            65000,
         )])
         .build()?;
 
@@ -198,7 +198,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
         .bind_addresses(vec![(
             "::".parse()
                 .unwrap(),
-            55001,
+            65001,
         )])
         .build()?;
 
@@ -243,7 +243,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
         .certificate(DeboaCertificate::from_slice(CA_CERT, ContentEncoding::DER))
         .build();
 
-    let request = deboa::request::get("https://localhost:55000/hello")?
+    let request = deboa::request::get("https://localhost:65000/hello")?
         .send_with(&client)
         .await?;
 
@@ -264,7 +264,7 @@ async fn test_multiple_interfaces() -> Result<(), Box<dyn Error>> {
         )
         .build();
 
-    let request = deboa::request::get(format!("https://{}:55001/hello", host))?
+    let request = deboa::request::get(format!("https://{}:65001/hello", host))?
         .send_with(&client)
         .await?;
 
