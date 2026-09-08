@@ -33,18 +33,23 @@ impl VetisBuilder {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// use http::StatusCode;
+    /// ```rust, ignore
+    /// use http::{StatusCode, Version};
     /// use vetis::{
     ///     server::ServerConfig,
     ///     host::{path::Path, handler_fn, HostConfig},
-    ///     VetisServer as _
     /// };
     /// use vetis_tokio::{
     ///     host::{Host, path::HandlerPath},
     ///     listener::build_listeners,
-    ///     Vetis,
-    /// }};
+    ///     Vetis, VetisServer as _
+    /// };
+    ///
+    /// let https = ListenerConfig::builder()
+    ///     .port(8443)
+    ///     .protos(vec![Version::HTTP_11])
+    ///     .interface("0.0.0.0".parse().unwrap())
+    ///     .build()?;
     ///
     /// let host_config = HostConfig::builder()
     ///     .hostname("example.com")
@@ -52,7 +57,7 @@ impl VetisBuilder {
     ///         "0.0.0.0"
     ///             .parse()
     ///             .unwrap(),
-    ///         80,
+    ///         8443,
     ///     )])
     ///     .build()?;
     ///
@@ -70,7 +75,7 @@ impl VetisBuilder {
     ///
     /// host.add_path(root_path);
     /// let server = Vetis::builder()
-    ///     .add_listeners(build_listeners(ipv4))?
+    ///     .add_listeners(build_listeners(https))?
     ///     .add_host(host)?
     ///     .build();
     ///
@@ -123,8 +128,8 @@ impl VetisBuilder {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use vetis::{server::ServerConfig, VetisServer as _};
-/// use vetis_tokio::Vetis;
+/// use vetis::{server::ServerConfig};
+/// use vetis_tokio::{Vetis, VetisServer as _};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -216,8 +221,8 @@ impl vetis::VetisServer for Vetis {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use vetis::{server::ServerConfig, VetisServer as _};
-    /// use vetis_tokio::Vetis;
+    /// use vetis::{server::ServerConfig};
+    /// use vetis_tokio::{Vetis, VetisServer as _};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -287,8 +292,8 @@ impl vetis::VetisServer for Vetis {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use vetis::{server::ServerConfig, VetisServer as _};
-    /// use vetis_tokio::Vetis;
+    /// use vetis::{server::ServerConfig};
+    /// use vetis_tokio::{Vetis, VetisServer as _};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -335,8 +340,8 @@ impl vetis::VetisServer for Vetis {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use vetis::{server::ServerConfig, VetisServer as _};
-    /// use vetis_tokio::Vetis;
+    /// use vetis::{server::ServerConfig};
+    /// use vetis_tokio::{Vetis, VetisServer as _};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -370,8 +375,7 @@ impl vetis::VetisServer for Vetis {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use vetis::VetisServer as _;
-    /// use vetis_tokio::Vetis;
+    /// use vetis_tokio::{Vetis, VetisServer as _};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -379,7 +383,7 @@ impl vetis::VetisServer for Vetis {
     ///     let mut server = Vetis::new(config);
     ///
     ///     let changed_config = vetis::server::ServerConfig::builder().build()?;
-    ///     server.reload(changed_config, vec![]).await;
+    ///     server.reload(changed_config).await;
     ///
     ///     Ok(())
     /// }

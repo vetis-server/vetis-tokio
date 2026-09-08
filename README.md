@@ -40,7 +40,7 @@ use vetis_macros::status_pages;
 use vetis_tokio::{
     host::{path::HandlerPath, Host},
     listener::build_listeners,
-    Vetis,
+    Vetis, VetisServer as _
 };
 
 pub(crate) const CA_CERT: &[u8] = include_bytes!("../certs/ca.der");
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     localhost_host.add_path(health_path);
 
-    let mut server = Vetis::builder;
+    let mut server = Vetis::builder()
         .add_listeners(build_listeners(https))?
         .add_host(localhost_host)?
         .build();

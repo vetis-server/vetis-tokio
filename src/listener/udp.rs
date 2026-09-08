@@ -1,7 +1,6 @@
 use crate::{host::Host, listener::ListenerResult, tls::TlsFactory, VetisHosts};
 use bytes::Bytes;
 use futures_util::StreamExt;
-use genswap::GenSwap;
 use h3::server::{Connection, RequestResolver};
 use h3_quinn::{
     quinn::{self, crypto::rustls::QuicServerConfig},
@@ -10,7 +9,8 @@ use h3_quinn::{
 use http::{HeaderName, HeaderValue, StatusCode};
 use hyper_body_utils::HttpBody;
 use log::{debug, error, info};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use papaya::HashMap;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 use vetis::{
     errors::{StartError, VetisError},
@@ -38,7 +38,7 @@ impl UdpListener {
     ///
     /// * `Self` - A new `UdpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { config, task: None, hosts: VetisHosts::new(GenSwap::new(HashMap::new())) }
+        Self { config, task: None, hosts: VetisHosts::new(HashMap::new()) }
     }
 }
 
@@ -52,16 +52,14 @@ impl vetis::listener::Listener for UdpListener {
     /// * `host` - A host instance.
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
-        self.hosts
-            .rcu(|hosts| {
-                let mut new = HashMap::clone(&hosts);
-                new.insert(
-                    host.hostname()
-                        .into(),
-                    host.clone(),
-                );
-                new
-            });
+        let new = self
+            .hosts
+            .pin_owned();
+        new.insert(
+            host.hostname()
+                .into(),
+            host.clone(),
+        );
         Ok(())
     }
 
@@ -70,14 +68,16 @@ impl vetis::listener::Listener for UdpListener {
     /// # Arguments
     ///
     /// * `host` - A host instance.
-    fn remove_host(&mut self, _hostname: &str) -> VetisResult<()> {
-        // Add a host
+    fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
+        let hosts = self
+            .hosts
+            .pin_owned();
+        hosts.remove(hostname);
         Ok(())
     }
 
     fn total_hosts(&self) -> usize {
-        let guard = self.hosts.reader();
-        guard.cached().len()
+        self.hosts.len()
     }
 
     fn config(&self) -> &ListenerConfig {
@@ -226,10 +226,8 @@ fn handle_http_request(
             let hosts = hosts.clone();
             let response = if let Some(authority) = host {
                 debug!("Serving request for host: {}", authority);
-                let mut cache = hosts.reader();
-                let host = cache
-                    .get()
-                    .get(authority.host());
+                let hosts = hosts.pin_owned();
+                let host = hosts.get(authority.host());
                 let response = if let Some(host) = host {
                     let (parts, body) = request.into_parts();
                     let request = Request::from_parts(parts, body);
