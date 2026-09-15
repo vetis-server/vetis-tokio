@@ -1,28 +1,22 @@
-use crate::{host::Host, listener::ListenerResult, tls::TlsFactory, VetisHosts};
-use http::Version;
-use hyper::server::conn::http1;
-#[cfg(feature = "http2")]
-use hyper::server::conn::http2;
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
-    server::conn::auto,
-};
-use log::error;
+use crate::{host::Host, tls::TlsFactory, worker::tcp::TcpWorker, VetisHosts};
+use log::{debug, error, info};
 use papaya::HashMap;
-use peekable::tokio::AsyncPeekable;
-use std::{borrow::Cow, net::SocketAddr, sync::Arc};
-use tokio::task::JoinHandle;
+use std::{net::SocketAddr, sync::Arc};
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 use vetis::{
-    errors::VetisError, host::Host as _, listener::ListenerConfig, server::http::HttpService,
-    VetisResult,
+    errors::{ListenerError, VetisError},
+    host::Host as _,
+    listener::ListenerConfig,
+    Alpn, VetisResult,
 };
 
 /// TCP listener
 pub struct TcpListener {
-    task: Option<JoinHandle<VetisResult<()>>>,
     config: ListenerConfig,
     pub(crate) hosts: VetisHosts<Host>,
+    token: Option<CancellationToken>,
+    inner: Option<tokio::net::TcpListener>,
 }
 
 impl TcpListener {
@@ -36,7 +30,7 @@ impl TcpListener {
     ///
     /// * `Self` - A new `TcpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { task: None, config, hosts: VetisHosts::new(HashMap::new()) }
+        Self { config, hosts: VetisHosts::new(HashMap::new()), token: None, inner: None }
     }
 }
 
@@ -70,8 +64,34 @@ impl vetis::listener::Listener for TcpListener {
         Ok(())
     }
 
+    /// Return totan number of hosts assigned to this listener
     fn total_hosts(&self) -> usize {
         self.hosts.len()
+    }
+
+    /// Reserve port by OS
+    async fn reserve_port(&mut self) -> VetisResult<()> {
+        if self.config.port() == 0 {
+            let listener = tokio::net::TcpListener::bind((
+                self.config
+                    .interface()
+                    .to_string(),
+                self.config.port(),
+            ))
+            .await
+            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+
+            let local_addr = listener
+                .local_addr()
+                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+
+            self.config
+                .reassign_port(local_addr.port());
+
+            self.inner = Some(listener);
+        }
+
+        Ok(())
     }
 
     fn config(&self) -> &ListenerConfig {
@@ -83,29 +103,41 @@ impl vetis::listener::Listener for TcpListener {
     /// # Returns
     ///
     /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
-    fn listen(&mut self) -> ListenerResult<'_, ()> {
-        let future = async move {
-            let addr = SocketAddr::new(
-                *self
-                    .config
-                    .interface(),
-                self.config.port(),
-            );
+    async fn listen(&mut self) -> VetisResult<()> {
+        let addr = SocketAddr::new(
+            *self
+                .config
+                .interface(),
+            self.config.port(),
+        );
 
-            let listener = tokio::net::TcpListener::bind(addr)
+        let listener = if let Some(listener) = self.inner.take() {
+            listener
+        } else {
+            tokio::net::TcpListener::bind(addr)
                 .await
-                .map_err(|e| VetisError::Bind(e.to_string()))?;
-
-            let task = self
-                .handle_connections(listener, self.hosts.clone())
-                .await?;
-
-            self.task = Some(task);
-
-            Ok(())
+                .map_err(|e| VetisError::Bind(e.to_string()))?
         };
 
-        Box::pin(future)
+        let dispatcher_token = CancellationToken::new();
+        let token = dispatcher_token.clone();
+        let mut dispatcher = ConnectionDispatcher::new(
+            listener,
+            self.hosts.clone(),
+            self.config.clone(),
+            dispatcher_token.child_token(),
+        );
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    info!("Stopping listener...")
+                }
+                _ = dispatcher.dispatch_connections() => ()
+            }
+        });
+        self.token = Some(dispatcher_token);
+
+        Ok(())
     }
 
     /// Stop the listener
@@ -113,152 +145,97 @@ impl vetis::listener::Listener for TcpListener {
     /// # Returns
     ///
     /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
-    fn stop(&mut self) -> ListenerResult<'_, ()> {
-        let future = async move {
-            if let Some(task) = self.task.take() {
-                task.abort();
-            }
-            Ok(())
-        };
-
-        Box::pin(future)
+    async fn stop(&mut self) -> VetisResult<()> {
+        if let Some(token) = self.token.take() {
+            token.cancel();
+        }
+        Ok(())
     }
 }
 
+struct ConnectionDispatcher {
+    listener: tokio::net::TcpListener,
+    hosts: VetisHosts<Host>,
+    config: ListenerConfig,
+    token: CancellationToken,
+}
+
 /// Decompose the TCP listener into smaller, more manageable structs
-impl TcpListener {
-    async fn handle_connections(
-        &mut self,
+impl ConnectionDispatcher {
+    pub fn new(
         listener: tokio::net::TcpListener,
         hosts: VetisHosts<Host>,
-    ) -> Result<JoinHandle<VetisResult<()>>, VetisError> {
-        // Limit supported alpns for TCP only
-        let alpn_protocols = self
-            .config
-            .protos()
-            .iter()
-            .map(|v| match *v {
-                Version::HTTP_11 | Version::HTTP_3 => b"http/1.1".to_vec(),
-                Version::HTTP_2 => b"h2".to_vec(),
-                _ => panic!("Unsupported protocol"),
-            })
-            .collect();
-        let tls_config = TlsFactory::create_tls_config(hosts.clone(), alpn_protocols).await?;
-        let tls_config = match tls_config {
-            Some(config) => config,
-            None => {
-                error!("Missing TLS config");
-                return Err(VetisError::Tls("Missing TLS config".to_string()));
-            }
-        };
+        config: ListenerConfig,
+        token: CancellationToken,
+    ) -> Self {
+        Self { listener, hosts, config, token }
+    }
 
+    async fn dispatch_connections(&mut self) -> VetisResult<()> {
+        // Limit supported alpns for TCP only
+        let alpn_protocols: Vec<Vec<u8>> = self
+            .config
+            .alpn_protos()
+            .iter()
+            .filter(|val| match val {
+                Alpn::AcmeTls1 | Alpn::Doh | Alpn::Dot | Alpn::Http11 | Alpn::H2 | Alpn::H2c => {
+                    true
+                }
+                _ => false,
+            })
+            .map(|val| val.into())
+            .collect();
+
+        let tls_config = TlsFactory::create_tls_config(self.hosts.clone(), alpn_protocols).await?;
         let allow_plain_connection = self
             .config
             .allow_unsafe_connections();
 
-        let tls_acceptor: TlsAcceptor = TlsAcceptor::from(Arc::new(tls_config));
-        let future = async move {
-            loop {
-                let result = listener
-                    .accept()
-                    .await;
+        loop {
+            let Ok((tcp_stream, _)) = self
+                .listener
+                .accept()
+                .await
+            else {
+                error!(
+                    "Cannot accept connection: {:?}",
+                    self.listener
+                        .accept()
+                        .await
+                        .err()
+                );
+                continue;
+            };
 
-                let (tcp_stream, client_addr) = match result {
-                    Ok(conn_info) => conn_info,
-                    Err(e) => {
-                        error!("Cannot accept connection: {:?}", e);
-                        continue;
-                    }
-                };
+            // TODO: Check ACL before proceeding
+            let mut worker = TcpWorker::new(
+                TlsAcceptor::from(tls_config.clone()),
+                self.hosts.clone(),
+                allow_plain_connection,
+                self.token
+                    .child_token(),
+            );
 
-                // TODO: Check ACL before proceeding
+            let token = self.token.clone();
+            let handle = tokio::spawn(async move {
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        debug!("Worker stopping..");
+                    },
+                    _ = worker.run(tcp_stream) => {}
+                }
+            });
 
-                let mut peekable = AsyncPeekable::from(tcp_stream);
-                let mut peeked = [0; 2];
-                let result = peekable
-                    .peek_exact(&mut peeked)
-                    .await;
-
-                if let Err(e) = result {
-                    error!("Cannot peek connection: {:?}", e);
+            match handle.await {
+                Ok(_) => {
+                    debug!("Worker successfully stopped..");
                     continue;
                 }
-
-                let is_tls = peeked.starts_with(&[0x16, 0x03]);
-                if is_tls {
-                    let tls_stream = tls_acceptor
-                        .accept(peekable)
-                        .await;
-
-                    let tls_stream = match tls_stream {
-                        Ok(tls_stream) => tls_stream,
-                        Err(e) => {
-                            error!("Cannot accept connection: {:?}", e);
-                            continue;
-                        }
-                    };
-
-                    let alpn = &tls_stream
-                        .get_ref()
-                        .1
-                        .alpn_protocol();
-                    if let Some(alpn_code) = alpn {
-                        let Cow::Borrowed(alpn_code) = String::from_utf8_lossy(alpn_code) else {
-                            error!("Cannot accept connection");
-                            continue;
-                        };
-
-                        match alpn_code {
-                            "http/1.1" => {
-                                let service = HttpService::new(hosts.clone(), client_addr);
-                                tokio::spawn(
-                                    http1::Builder::new()
-                                        .serve_connection(TokioIo::new(tls_stream), service),
-                                );
-                            }
-                            #[cfg(feature = "http2")]
-                            "h2" => {
-                                let service = HttpService::new(hosts.clone(), client_addr);
-                                tokio::spawn(
-                                    http2::Builder::new(TokioExecutor::new())
-                                        .serve_connection(TokioIo::new(tls_stream), service),
-                                );
-                            }
-                            _ => {
-                                error!("Unsupported protocol: {}", alpn_code);
-                            }
-                        }
-                    } else {
-                        let service = HttpService::new(hosts.clone(), client_addr);
-                        tokio::spawn(async move {
-                            let result = auto::Builder::new(TokioExecutor::new())
-                                .serve_connection_with_upgrades(TokioIo::new(tls_stream), service)
-                                .await;
-                            match result {
-                                Err(e) => {
-                                    error!("Error while processing request: {}", e.to_string())
-                                }
-                                Ok(()) => {}
-                            }
-                        });
-                    }
-                } else if allow_plain_connection {
-                    let service = HttpService::new(hosts.clone(), client_addr);
-                    tokio::spawn(async move {
-                        let result = auto::Builder::new(TokioExecutor::new())
-                            .serve_connection_with_upgrades(TokioIo::new(peekable), service)
-                            .await;
-                        match result {
-                            Err(e) => {
-                                error!("Error while processing request: {}", e.to_string())
-                            }
-                            Ok(()) => {}
-                        }
-                    });
+                Err(e) => {
+                    error!("Internal error: {:?}", e);
+                    continue;
                 }
             }
-        };
-
-        Ok(tokio::spawn(future))
+        }
     }
 }

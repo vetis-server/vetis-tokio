@@ -4,13 +4,9 @@ use crate::listener::tcp::TcpListener;
 use crate::listener::udp::UdpListener;
 use http::Version;
 use std::sync::Arc;
-use vetis::{
-    listener::{ListenerConfig, ListenerResult},
-    VetisResult,
-};
+use vetis::{listener::ListenerConfig, VetisResult};
 
 pub(crate) mod tcp;
-
 #[cfg(feature = "http3")]
 pub(crate) mod udp;
 
@@ -23,7 +19,6 @@ pub enum Listener {
     Udp(UdpListener),
 }
 
-#[cfg(not(feature = "http3"))]
 impl From<TcpListener> for Listener {
     fn from(value: TcpListener) -> Self {
         Listener::Tcp(value)
@@ -40,20 +35,17 @@ impl From<UdpListener> for Listener {
 /// Build listeners out of ListenerConfig
 pub fn build_listeners(config: ListenerConfig) -> Vec<Listener> {
     let mut listeners = Vec::new();
-    if config
-        .protos()
-        .iter()
-        .any(|v| *v == Version::HTTP_11 || *v == Version::HTTP_2)
-    {
-        listeners.push(Listener::Tcp(TcpListener::new(config.clone())));
-    }
-    #[cfg(feature = "http3")]
-    if config
-        .protos()
-        .iter()
-        .any(|v| *v == Version::HTTP_3)
-    {
-        listeners.push(Listener::Udp(UdpListener::new(config.clone())));
+    for proto in config.protos() {
+        match proto {
+            &Version::HTTP_11 | &Version::HTTP_2 => {
+                listeners.push(Listener::Tcp(TcpListener::new(config.clone())));
+            }
+            #[cfg(feature = "http3")]
+            &Version::HTTP_3 => {
+                listeners.push(Listener::Udp(UdpListener::new(config.clone())));
+            }
+            _ => {}
+        }
     }
     listeners
 }
@@ -86,6 +78,23 @@ impl vetis::listener::Listener for Listener {
         }
     }
 
+    /// Ask OS to reserve a free port
+    async fn reserve_port(&mut self) -> VetisResult<()> {
+        match self {
+            Listener::Tcp(tcp_listener) => {
+                tcp_listener
+                    .reserve_port()
+                    .await
+            }
+            #[cfg(feature = "http3")]
+            Listener::Udp(udp_listener) => {
+                udp_listener
+                    .reserve_port()
+                    .await
+            }
+        }
+    }
+
     fn config(&self) -> &ListenerConfig {
         match self {
             Listener::Tcp(tcp_listener) => tcp_listener.config(),
@@ -94,41 +103,37 @@ impl vetis::listener::Listener for Listener {
         }
     }
 
-    fn listen(&mut self) -> ListenerResult<'_, ()> {
-        Box::pin(async move {
-            match self {
-                Listener::Tcp(tcp_listener) => {
-                    tcp_listener
-                        .listen()
-                        .await?
-                }
-                #[cfg(feature = "http3")]
-                Listener::Udp(udp_listener) => {
-                    udp_listener
-                        .listen()
-                        .await?
-                }
+    async fn listen(&mut self) -> VetisResult<()> {
+        match self {
+            Listener::Tcp(tcp_listener) => {
+                tcp_listener
+                    .listen()
+                    .await?
             }
-            Ok(())
-        })
+            #[cfg(feature = "http3")]
+            Listener::Udp(udp_listener) => {
+                udp_listener
+                    .listen()
+                    .await?
+            }
+        }
+        Ok(())
     }
 
-    fn stop(&mut self) -> ListenerResult<'_, ()> {
-        Box::pin(async move {
-            match self {
-                Listener::Tcp(tcp_listener) => {
-                    tcp_listener
-                        .stop()
-                        .await?
-                }
-                #[cfg(feature = "http3")]
-                Listener::Udp(udp_listener) => {
-                    udp_listener
-                        .stop()
-                        .await?
-                }
+    async fn stop(&mut self) -> VetisResult<()> {
+        match self {
+            Listener::Tcp(tcp_listener) => {
+                tcp_listener
+                    .stop()
+                    .await?
             }
-            Ok(())
-        })
+            #[cfg(feature = "http3")]
+            Listener::Udp(udp_listener) => {
+                udp_listener
+                    .stop()
+                    .await?
+            }
+        }
+        Ok(())
     }
 }

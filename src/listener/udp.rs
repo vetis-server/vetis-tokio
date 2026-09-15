@@ -1,30 +1,23 @@
-use crate::{host::Host, listener::ListenerResult, tls::TlsFactory, VetisHosts};
-use bytes::Bytes;
-use futures_util::StreamExt;
-use h3::server::{Connection, RequestResolver};
-use h3_quinn::{
-    quinn::{self, crypto::rustls::QuicServerConfig},
-    Connection as QuinnConnection,
-};
-use http::{HeaderName, HeaderValue, StatusCode};
-use hyper_body_utils::HttpBody;
+use crate::{host::Host, tls::TlsFactory, worker::udp::UdpWorker, VetisHosts};
+use h3_quinn::quinn::{self, crypto::rustls::QuicServerConfig};
 use log::{debug, error, info};
 use papaya::HashMap;
+use quinn::Endpoint;
 use std::{net::SocketAddr, sync::Arc};
-use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use vetis::{
-    errors::{StartError, VetisError},
+    errors::{ListenerError, StartError, VetisError},
     host::Host as _,
     listener::ListenerConfig,
-    request::Request,
-    Response, VetisResult,
+    Alpn, VetisResult,
 };
 
 /// UDP listener
 pub struct UdpListener {
     config: ListenerConfig,
-    task: Option<JoinHandle<()>>,
-    hosts: VetisHosts<Host>,
+    pub(crate) hosts: VetisHosts<Host>,
+    token: Option<CancellationToken>,
+    inner: Option<Endpoint>,
 }
 
 impl UdpListener {
@@ -38,7 +31,35 @@ impl UdpListener {
     ///
     /// * `Self` - A new `UdpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { config, task: None, hosts: VetisHosts::new(HashMap::new()) }
+        Self { config, hosts: VetisHosts::new(HashMap::new()), token: None, inner: None }
+    }
+
+    async fn create_inner_listener(&mut self) -> VetisResult<Endpoint> {
+        let addr = SocketAddr::new(
+            *self
+                .config
+                .interface(),
+            self.config.port(),
+        );
+
+        let alpn_protos: Vec<Vec<u8>> = self
+            .config
+            .alpn_protos()
+            .iter()
+            .filter(|val| match val {
+                Alpn::H3 | Alpn::Doq => true,
+                _ => false,
+            })
+            .map(|val| val.into())
+            .collect();
+
+        let tls_config = TlsFactory::create_tls_config(self.hosts.clone(), alpn_protos).await?;
+        let quic_config = QuicServerConfig::try_from(tls_config)
+            .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
+
+        quinn::Endpoint::server(server_config, addr)
+            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))
     }
 }
 
@@ -52,14 +73,10 @@ impl vetis::listener::Listener for UdpListener {
     /// * `host` - A host instance.
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
-        let new = self
+        let hosts = self
             .hosts
             .pin_owned();
-        new.insert(
-            host.hostname()
-                .into(),
-            host.clone(),
-        );
+        hosts.insert(format!("{}:{}", host.hostname(), self.config().port()), host.clone());
         Ok(())
     }
 
@@ -80,6 +97,25 @@ impl vetis::listener::Listener for UdpListener {
         self.hosts.len()
     }
 
+    async fn reserve_port(&mut self) -> VetisResult<()> {
+        if self.config.port() == 0 {
+            let listener = self
+                .create_inner_listener()
+                .await?;
+
+            let local_addr = listener
+                .local_addr()
+                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+
+            self.config
+                .reassign_port(local_addr.port());
+
+            self.inner = Some(listener);
+        }
+
+        Ok(())
+    }
+
     fn config(&self) -> &ListenerConfig {
         &self.config
     }
@@ -89,37 +125,30 @@ impl vetis::listener::Listener for UdpListener {
     /// # Returns
     ///
     /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
-    fn listen(&mut self) -> ListenerResult<'_, ()> {
-        let future = async move {
-            let addr = SocketAddr::new(
-                *self
-                    .config
-                    .interface(),
-                self.config.port(),
-            );
-
-            let tls_config =
-                TlsFactory::create_tls_config(self.hosts.clone(), vec![b"h3".to_vec()]).await?;
-
-            if let Some(tls_config) = tls_config {
-                let quic_config = QuicServerConfig::try_from(tls_config)
-                    .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
-
-                let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
-
-                let endpoint = quinn::Endpoint::server(server_config, addr)
-                    .map_err(|e| VetisError::Bind(e.to_string()))?;
-
-                let server_task = self
-                    .handle_connections(endpoint, self.hosts.clone())
-                    .await?;
-
-                self.task = Some(server_task);
-            }
-
-            Ok(())
+    async fn listen(&mut self) -> VetisResult<()> {
+        let listener = if let Some(listener) = self.inner.take() {
+            listener
+        } else {
+            self.create_inner_listener()
+                .await?
         };
-        Box::pin(future)
+
+        let dispatcher_token = CancellationToken::new();
+        let token = dispatcher_token.clone();
+        let mut dispatcher =
+            ConnectionDispatcher::new(listener, self.hosts.clone(), dispatcher_token.child_token());
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    info!("Listener stopping");
+                }
+                _ = dispatcher.dispatch_connections() => ()
+            }
+        });
+
+        self.token = Some(dispatcher_token);
+
+        Ok(())
     }
 
     /// Stop the listener
@@ -127,217 +156,66 @@ impl vetis::listener::Listener for UdpListener {
     /// # Returns
     ///
     /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
-    fn stop(&mut self) -> ListenerResult<'_, ()> {
-        Box::pin(async move {
-            if let Some(task) = self.task.take() {
-                task.abort();
-            }
-            Ok(())
-        })
+    async fn stop(&mut self) -> VetisResult<()> {
+        if let Some(token) = self.token.take() {
+            token.cancel();
+        }
+        Ok(())
     }
 }
 
-impl UdpListener {
-    async fn handle_connections(
-        &mut self,
-        endpoint: quinn::Endpoint,
-        hosts: VetisHosts<Host>,
-    ) -> Result<JoinHandle<()>, VetisError> {
-        let task = tokio::spawn(async move {
-            while let Some(new_conn) = endpoint
-                .accept()
-                .await
-            {
-                let hosts = hosts.clone();
-                let addr = new_conn.remote_address();
-                tokio::spawn(async move {
-                    match new_conn.await {
-                        Ok(conn) => {
-                            let mut h3_conn: Connection<QuinnConnection, Bytes> =
-                                match Connection::new(QuinnConnection::new(conn)).await {
-                                    Ok(conn) => conn,
-                                    Err(err) => {
-                                        error!("Cannot create connection: {:?}", err);
-                                        return;
-                                    }
-                                };
-
-                            loop {
-                                match h3_conn
-                                    .accept()
-                                    .await
-                                {
-                                    Ok(Some(resolver)) => {
-                                        let result =
-                                            handle_http_request(resolver, hosts.clone(), addr);
-
-                                        if let Err(err) = result {
-                                            error!("Error handling HTTP request: {:?}", err);
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        break;
-                                    }
-                                    Err(err) => {
-                                        error!("Cannot accept connection: {:?}", err);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            error!("Accepting connection failed: {:?}", err);
-                        }
-                    }
-                });
-            }
-
-            endpoint
-                .wait_idle()
-                .await;
-        });
-
-        Ok(task)
-    }
-}
-
-fn handle_http_request(
-    resolver: RequestResolver<QuinnConnection, Bytes>,
+struct ConnectionDispatcher {
+    listener: quinn::Endpoint,
     hosts: VetisHosts<Host>,
-    client_addr: SocketAddr,
-) -> VetisResult<()> {
-    let hosts = hosts.clone();
-    tokio::spawn(async move {
-        let result = resolver
-            .resolve_request()
-            .await;
-        if let Ok((req, stream)) = result {
-            let (mut send_stream, recv_stream) = stream.split();
-            let (parts, _) = req.into_parts();
-            let method = parts.method.clone();
-            let uri = parts.uri.clone();
-            let body = HttpBody::from_generic_server(recv_stream);
-            let request = http::Request::from_parts(parts, body);
+    token: CancellationToken,
+}
 
-            let host = request
-                .uri()
-                .authority();
+impl ConnectionDispatcher {
+    pub fn new(
+        listener: quinn::Endpoint,
+        hosts: VetisHosts<Host>,
+        token: CancellationToken,
+    ) -> Self {
+        Self { listener, hosts, token }
+    }
 
-            let hosts = hosts.clone();
-            let response = if let Some(authority) = host {
-                debug!("Serving request for host: {}", authority);
-                let hosts = hosts.pin_owned();
-                let host = hosts.get(authority.host());
-                let response = if let Some(host) = host {
-                    let (parts, body) = request.into_parts();
-                    let request = Request::from_parts(parts, body);
-
-                    let vetis_response = host
-                        .route(request)
-                        .await;
-
-                    let response = if let Err(err) = vetis_response {
-                        error!("Error executing request: {:?}", err);
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .text("Internal server error")
-                            .into_inner()
-                    } else {
-                        let mut response = vetis_response
-                            .unwrap()
-                            .into_inner();
-
-                        let default_headers = host
-                            .config()
-                            .default_headers();
-
-                        if let Some(default_headers) = default_headers {
-                            for (key, value) in default_headers {
-                                let Ok(header_name) = HeaderName::from_bytes(key.as_bytes()) else {
-                                    error!("Invalid header name: {}", key);
-                                    continue;
-                                };
-
-                                let Ok(header_value) = HeaderValue::from_str(value.as_str()) else {
-                                    error!("Invalid header value: {}", value);
-                                    continue;
-                                };
-
-                                response
-                                    .headers_mut()
-                                    .insert(header_name, header_value);
-                            }
-                        }
-
-                        response
-                    };
-
-                    // TODO: Log request and its response status code (move it to oneshot channel?)
-                    info!("{} {} {} {}", client_addr, method, uri, response.status());
-
-                    Ok::<_, VetisError>(response)
-                } else {
-                    error!("Host not found: {}", authority.host());
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_GATEWAY)
-                        .text("Host not found")
-                        .into_inner();
-                    Ok(response)
-                };
-
-                response
-            } else {
-                error!("Host not found in request");
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .text("Host not found")
-                    .into_inner();
-                Ok(response)
-            };
-
-            if let Ok(response) = response {
-                let (parts, mut body) = response.into_parts();
-
-                let mut resp = http::Response::builder()
-                    .status(parts.status)
-                    .version(parts.version)
-                    .extension(parts.extensions)
-                    .body(())
-                    .unwrap();
-
-                resp.headers_mut()
-                    .extend(parts.headers);
-
-                match send_stream
-                    .send_response(resp)
-                    .await
-                {
-                    Ok(_) => {
-                        debug!("Successfully respond to connection");
-                    }
-                    Err(err) => {
-                        error!("Unable to send response to connection: {:?}", err);
-                    }
+    async fn dispatch_connections(&mut self) -> VetisResult<()> {
+        while let Some(new_conn) = self
+            .listener
+            .accept()
+            .await
+        {
+            let mut worker = UdpWorker::new(
+                self.hosts.clone(),
+                self.token
+                    .child_token(),
+            );
+            let token = self.token.clone();
+            let handle = tokio::spawn(async move {
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        debug!("Worker stopping..");
+                    },
+                    _ = worker.run(new_conn) => {}
                 }
+            });
 
-                while let Some(buf) = body.next().await {
-                    if let Ok(buf) = buf {
-                        if let Ok(bytes) = buf.into_data() {
-                            let _ = send_stream
-                                .send_data(bytes)
-                                .await;
-                        }
-                    }
+            match handle.await {
+                Ok(_) => {
+                    debug!("Worker successfully stopped..");
+                    continue;
                 }
-
-                let _ = send_stream
-                    .finish()
-                    .await;
-            } else {
-                error!("HttpServer - Error serving connection: {:?}", response.err());
+                Err(e) => {
+                    error!("Internal error: {:?}", e);
+                    continue;
+                }
             }
         }
-    });
 
-    Ok(())
+        self.listener
+            .wait_idle()
+            .await;
+
+        Ok(())
+    }
 }
