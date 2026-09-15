@@ -14,13 +14,15 @@ pub mod rt;
 mod tests;
 /// TLS module
 mod tls;
+/// Worker module
+pub(crate) mod worker;
 
 pub use crate::rt::Vetis;
 pub use vetis::{
     base::VetisServer,
     errors,
     host::{handler_fn, HostConfig},
-    listener::ListenerConfig,
+    listener::{Listener as VetisListener, ListenerConfig},
     request::Request,
     response::Response,
     security::SecurityConfig,
