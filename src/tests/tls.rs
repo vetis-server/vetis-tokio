@@ -110,46 +110,29 @@ fn create_test_hosts_invalid_key() -> VetisHosts<Host> {
     VetisHosts::new(hosts.into())
 }
 
-async fn do_create_tls_config_success() {
+#[tokio::test]
+async fn test_create_tls_config_success() {
     let hosts = create_test_hosts();
     let alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    let result = TlsFactory::create_tls_config(hosts, alpn_protocols).await;
-
-    assert!(result.is_ok(), "TLS config creation should succeed");
-    let tls_config = result.unwrap();
-    assert!(tls_config.is_some(), "TLS config should be Some");
-
-    let config = tls_config.unwrap();
+    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
+        .await
+        .unwrap();
     assert_eq!(config.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
     assert_eq!(config.max_early_data_size, u32::MAX);
 }
 
 #[tokio::test]
-async fn test_create_tls_config_success() {
-    do_create_tls_config_success().await;
-}
-
-async fn do_create_tls_config_no_security() {
+async fn test_create_tls_config_no_security() {
     let hosts = create_test_hosts_no_security();
     let alpn_protocols = vec![b"http/1.1".to_vec()];
-
-    let result = TlsFactory::create_tls_config(hosts, alpn_protocols).await;
-
-    assert!(result.is_ok(), "TLS config creation should succeed even without security");
-    let tls_config = result.unwrap();
-    assert!(tls_config.is_some(), "TLS config should be Some");
-
-    let config = tls_config.unwrap();
+    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
+        .await
+        .unwrap();
     assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
 }
 
 #[tokio::test]
-async fn test_create_tls_config_no_security() {
-    do_create_tls_config_no_security().await;
-}
-
-async fn do_create_tls_config_invalid_private_key() {
+async fn test_create_tls_config_invalid_private_key() {
     let hosts = create_test_hosts_invalid_key();
     let alpn_protocols = vec![b"http/1.1".to_vec()];
 
@@ -165,21 +148,12 @@ async fn do_create_tls_config_invalid_private_key() {
 }
 
 #[tokio::test]
-async fn test_create_tls_config_invalid_private_key() {
-    do_create_tls_config_invalid_private_key().await;
-}
-
-async fn do_create_tls_config_empty_alpn() {
+async fn test_create_tls_config_empty_alpn() {
     let hosts = create_test_hosts();
     let alpn_protocols = vec![];
-
-    let result = TlsFactory::create_tls_config(hosts, alpn_protocols).await;
-
-    assert!(result.is_ok(), "TLS config creation should succeed with empty ALPN");
-    let tls_config = result.unwrap();
-    assert!(tls_config.is_some(), "TLS config should be Some");
-
-    let config = tls_config.unwrap();
+    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
+        .await
+        .unwrap();
     assert!(
         config
             .alpn_protocols
@@ -189,11 +163,7 @@ async fn do_create_tls_config_empty_alpn() {
 }
 
 #[tokio::test]
-async fn test_create_tls_config_empty_alpn() {
-    do_create_tls_config_empty_alpn().await;
-}
-
-async fn do_create_tls_config_multiple_hosts() {
+async fn test_create_tls_config_multiple_hosts() {
     // Create first virtual host with security
     let security_config1 = SecurityConfig::builder()
         .cert_from_bytes(SERVER_CERT.to_vec())
@@ -250,36 +220,18 @@ async fn do_create_tls_config_multiple_hosts() {
     drop(guard);
 
     let alpn_protocols = vec![b"h2".to_vec()];
-
     let result = TlsFactory::create_tls_config(VetisHosts::new(hosts.into()), alpn_protocols).await;
-
     assert!(result.is_ok(), "TLS config creation should succeed with multiple hosts");
-    let tls_config = result.unwrap();
-    assert!(tls_config.is_some(), "TLS config should be Some");
-}
-
-#[tokio::test]
-async fn test_create_tls_config_multiple_hosts() {
-    do_create_tls_config_multiple_hosts().await;
-}
-
-async fn do_create_tls_config_with_ca_cert() {
-    let hosts = create_test_hosts();
-    let alpn_protocols = vec![b"http/1.1".to_vec()];
-
-    let result = TlsFactory::create_tls_config(hosts, alpn_protocols).await;
-
-    assert!(result.is_ok(), "TLS config creation should succeed with CA cert");
-    let tls_config = result.unwrap();
-    assert!(tls_config.is_some(), "TLS config should be Some");
-
-    let config = tls_config.unwrap();
-    assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
 }
 
 #[tokio::test]
 async fn test_create_tls_config_with_ca_cert() {
-    do_create_tls_config_with_ca_cert().await;
+    let hosts = create_test_hosts();
+    let alpn_protocols = vec![b"http/1.1".to_vec()];
+    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
+        .await
+        .unwrap();
+    assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
 }
 
 #[test]

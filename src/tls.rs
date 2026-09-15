@@ -18,7 +18,7 @@ impl TlsFactory {
     pub async fn create_tls_config(
         hosts: VetisHosts<Host>,
         alpn_protocols: Vec<Vec<u8>>,
-    ) -> Result<Option<ServerConfig>, VetisError> {
+    ) -> Result<Arc<ServerConfig>, VetisError> {
         let hosts = hosts.clone();
         #[cfg(feature = "__rustls_awc_lc_rs")]
         let provider = rustls::crypto::aws_lc_rs::default_provider();
@@ -64,15 +64,12 @@ impl TlsFactory {
             .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
 
         // TODO: Add client verification (mTLS)
-        // TODO: Possibly add some sort of hook for client certificate custom verification
 
         let mut tls_config = builder
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(resolver));
-
         tls_config.max_early_data_size = u32::MAX;
         tls_config.alpn_protocols = alpn_protocols;
-
-        Ok(Some(tls_config))
+        Ok(tls_config.into())
     }
 }
