@@ -12,8 +12,7 @@ vetis = { version = "0.1.0" }
 
 ## Crate features
 
-- http1 (default)
-- http2
+- http2 (default)
 - http3
 - rust-tls (default)
 
