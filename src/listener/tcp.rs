@@ -1,22 +1,66 @@
-use crate::{host::Host, tls::TlsFactory, worker::tcp::TcpWorker, VetisHosts};
-use log::{debug, error, info};
+use crate::{VetisHosts, host::Host, tls::TlsFactory, worker::tcp::TcpWorker};
+use crossfire::{
+    MAsyncRx, MAsyncTx,
+    mpmc::{self, Array},
+};
 use papaya::HashMap;
-use std::{net::SocketAddr, sync::Arc};
+use std::{hash::Hash, net::SocketAddr, sync::Arc};
+use tokio::{
+    net::TcpStream,
+    sync::watch,
+    task::{JoinHandle, JoinSet},
+};
 use tokio_rustls::TlsAcceptor;
-use tokio_util::sync::CancellationToken;
 use vetis::{
+    LogSender, VetisResult, debug, error,
     errors::{ListenerError, VetisError},
     host::Host as _,
+    info,
     listener::ListenerConfig,
-    Alpn, VetisResult,
+    log::Logger,
 };
 
 /// TCP listener
 pub struct TcpListener {
     config: ListenerConfig,
-    pub(crate) hosts: VetisHosts<Host>,
-    token: Option<CancellationToken>,
+    hosts: VetisHosts<Host>,
+    signal: Option<watch::Sender<bool>>,
     inner: Option<tokio::net::TcpListener>,
+    logger: Option<Logger<LogSender>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Hash for TcpListener {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.config
+            .port()
+            .hash(state);
+        self.config
+            .interface()
+            .hash(state);
+    }
+}
+
+impl PartialEq for TcpListener {
+    fn eq(&self, other: &Self) -> bool {
+        self.config.port() == other.config.port()
+            && self
+                .config
+                .interface()
+                == other
+                    .config
+                    .interface()
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.config.port() != other.config.port()
+            && self
+                .config
+                .interface()
+                != other
+                    .config
+                    .interface()
+    }
 }
 
 impl TcpListener {
@@ -30,32 +74,38 @@ impl TcpListener {
     ///
     /// * `Self` - A new `TcpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { config, hosts: VetisHosts::new(HashMap::new()), token: None, inner: None }
+        Self {
+            config,
+            hosts: VetisHosts::new(HashMap::new()),
+            signal: None,
+            inner: None,
+            logger: None,
+            handle: None,
+        }
     }
 }
 
 impl vetis::listener::Listener for TcpListener {
     type RuntimeHost = Host;
+    type Logger = Logger<LogSender>;
 
-    /// Add a new host
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - A host instance.
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
         let hosts = self
             .hosts
             .pin_owned();
-        hosts.insert(format!("{}:{}", host.hostname(), self.config().port()), host.clone());
+        hosts.insert(
+            format!(
+                "{}:{}",
+                host.hostname()
+                    .to_string(),
+                self.config().port()
+            ),
+            host.clone(),
+        );
         Ok(())
     }
 
-    /// Add a new host
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - A host instance.
     fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
         let hosts = self
             .hosts
@@ -64,12 +114,14 @@ impl vetis::listener::Listener for TcpListener {
         Ok(())
     }
 
-    /// Return totan number of hosts assigned to this listener
+    fn logger(&mut self, logger: Self::Logger) {
+        self.logger = Some(logger);
+    }
+
     fn total_hosts(&self) -> usize {
         self.hosts.len()
     }
 
-    /// Reserve port by OS
     async fn reserve_port(&mut self) -> VetisResult<()> {
         if self.config.port() == 0 {
             let listener = tokio::net::TcpListener::bind((
@@ -94,16 +146,17 @@ impl vetis::listener::Listener for TcpListener {
         Ok(())
     }
 
+    fn reassign_port(&mut self, port: u16) {
+        self.config
+            .reassign_port(port);
+    }
+
     fn config(&self) -> &ListenerConfig {
         &self.config
     }
 
-    /// Listen for incoming connections
-    ///
-    /// # Returns
-    ///
-    /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
     async fn listen(&mut self) -> VetisResult<()> {
+        info!(&self.logger, "TCP listener started...");
         let addr = SocketAddr::new(
             *self
                 .config
@@ -119,35 +172,42 @@ impl vetis::listener::Listener for TcpListener {
                 .map_err(|e| VetisError::Bind(e.to_string()))?
         };
 
-        let dispatcher_token = CancellationToken::new();
-        let token = dispatcher_token.clone();
+        let (sender, receiver) = watch::channel(false);
+        let mut shut_signal = receiver.clone();
+        let logger = self.logger.clone();
         let mut dispatcher = ConnectionDispatcher::new(
             listener,
             self.hosts.clone(),
             self.config.clone(),
-            dispatcher_token.child_token(),
+            self.logger.clone(),
         );
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tokio::select! {
-                _ = token.cancelled() => {
-                    info!("Stopping listener...")
+                _ = shut_signal.changed() => {
+                    info!(logger, "Stopping listener...");
+                    let _ = dispatcher.stop().await;
                 }
-                _ = dispatcher.dispatch_connections() => ()
+                _ = dispatcher.run() => ()
             }
         });
-        self.token = Some(dispatcher_token);
+
+        self.signal = Some(sender);
+        self.handle = Some(handle);
 
         Ok(())
     }
 
-    /// Stop the listener
-    ///
-    /// # Returns
-    ///
-    /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
     async fn stop(&mut self) -> VetisResult<()> {
-        if let Some(token) = self.token.take() {
-            token.cancel();
+        if let Some(signal) = self.signal.take() {
+            let _ = signal.send(true);
+            if let Some(handle) = self.handle.take() {
+                match handle.await {
+                    Ok(_) => info!(&self.logger, "TCP Listener stopped successfully!"),
+                    Err(e) => {
+                        error!(self.logger, "Error while stopping listener: {}", e.to_string())
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -157,8 +217,13 @@ struct ConnectionDispatcher {
     listener: tokio::net::TcpListener,
     hosts: VetisHosts<Host>,
     config: ListenerConfig,
-    token: CancellationToken,
+    signal: Option<watch::Sender<bool>>,
+    logger: Option<Logger<LogSender>>,
+    workers: JoinSet<()>,
+    sender: Option<MAsyncTx<Array<TcpStream>>>,
 }
+
+unsafe impl Send for ConnectionDispatcher {}
 
 /// Decompose the TCP listener into smaller, more manageable structs
 impl ConnectionDispatcher {
@@ -166,30 +231,73 @@ impl ConnectionDispatcher {
         listener: tokio::net::TcpListener,
         hosts: VetisHosts<Host>,
         config: ListenerConfig,
-        token: CancellationToken,
+        logger: Option<Logger<LogSender>>,
     ) -> Self {
-        Self { listener, hosts, config, token }
+        Self {
+            listener,
+            hosts,
+            config,
+            signal: None,
+            logger,
+            workers: JoinSet::new(),
+            sender: None,
+        }
     }
 
-    async fn dispatch_connections(&mut self) -> VetisResult<()> {
-        // Limit supported alpns for TCP only
-        let alpn_protocols: Vec<Vec<u8>> = self
+    async fn init(&mut self, receiver: MAsyncRx<Array<TcpStream>>) -> VetisResult<()> {
+        info!(&self.logger, "Initializing tcp workers...");
+        let (shut_sender, shut_recv) = watch::channel(false);
+        let tls_config = TlsFactory::create_tls_config(self.hosts.clone()).await?;
+        let tls_acceptor = TlsAcceptor::from(tls_config.clone());
+        for worker_num in 1..=self
             .config
-            .alpn_protos()
-            .iter()
-            .filter(|val| match val {
-                Alpn::AcmeTls1 | Alpn::Doh | Alpn::Dot | Alpn::Http11 | Alpn::H2 | Alpn::H2c => {
-                    true
-                }
-                _ => false,
-            })
-            .map(|val| val.into())
-            .collect();
+            .workers()
+        {
+            info!(&self.logger, "Initializing tcp worker: {}", worker_num);
+            // TODO: Check ACL before proceeding
+            let mut worker = TcpWorker::new(
+                worker_num,
+                tls_acceptor.clone(),
+                self.hosts.clone(),
+                self.logger.clone(),
+                receiver.clone(),
+            );
 
-        let tls_config = TlsFactory::create_tls_config(self.hosts.clone(), alpn_protocols).await?;
-        let allow_plain_connection = self
-            .config
-            .allow_unsafe_connections();
+            let mut shut_signal = shut_recv.clone();
+            let logger = self.logger.clone();
+            let worker_future = async move {
+                tokio::select! {
+                    _ = shut_signal.changed() => {
+                        info!(logger, "Stopping tcp worker {}...", worker.id());
+                        let _ = worker.stop().await;
+                    },
+                    _ = worker.run() => {}
+                }
+            };
+
+            self.workers
+                .spawn(worker_future);
+        }
+
+        self.signal = Some(shut_sender);
+
+        Ok(())
+    }
+
+    async fn run(&mut self) -> VetisResult<()> {
+        let (dispatch_sender, dispatch_recv) = mpmc::bounded_async::<TcpStream>(
+            self.config
+                .workers(),
+        );
+
+        if let Err(e) = self
+            .init(dispatch_recv.clone())
+            .await
+        {
+            error!(self.logger, "Could not start workers: {}", e.to_string())
+        }
+
+        self.sender = Some(dispatch_sender);
 
         loop {
             let Ok((tcp_stream, _)) = self
@@ -197,45 +305,47 @@ impl ConnectionDispatcher {
                 .accept()
                 .await
             else {
-                error!(
+                debug!(
+                    self.logger,
                     "Cannot accept connection: {:?}",
                     self.listener
                         .accept()
                         .await
                         .err()
                 );
+
                 continue;
             };
 
-            // TODO: Check ACL before proceeding
-            let mut worker = TcpWorker::new(
-                TlsAcceptor::from(tls_config.clone()),
-                self.hosts.clone(),
-                allow_plain_connection,
-                self.token
-                    .child_token(),
-            );
+            if let Some(sender) = self.sender.as_ref()
+                && let Err(e) = sender
+                    .send(tcp_stream)
+                    .await
+            {
+                error!(self.logger, "Could not distribute connection: {}", e.to_string())
+            }
+        }
+    }
 
-            let token = self.token.clone();
-            let handle = tokio::spawn(async move {
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        debug!("Worker stopping..");
-                    },
-                    _ = worker.run(tcp_stream) => {}
-                }
-            });
-
-            match handle.await {
+    pub async fn stop(&mut self) -> VetisResult<()> {
+        if let Some(signal) = self.signal.take() {
+            let _ = signal.send(true);
+        }
+        while let Some(handle) = self
+            .workers
+            .join_next()
+            .await
+        {
+            match handle {
                 Ok(_) => {
-                    debug!("Worker successfully stopped..");
-                    continue;
+                    info!(&self.logger, "TCP worker stopped successfully!");
                 }
                 Err(e) => {
-                    error!("Internal error: {:?}", e);
-                    continue;
+                    error!(self.logger, "Internal error: {:?}", e);
                 }
             }
         }
+
+        Ok(())
     }
 }

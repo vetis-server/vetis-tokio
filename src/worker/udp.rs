@@ -1,44 +1,65 @@
 use crate::host::Host;
+use crossfire::{MAsyncRx, mpmc::Array};
 use futures_util::StreamExt;
 use h3::server::Connection;
 use h3_quinn::Connection as QuinnConnection;
 use http::{HeaderName, HeaderValue, StatusCode};
 use hyper::service::Service;
 use hyper_body_utils::HttpBody;
-use log::{debug, error, info};
 use std::net::SocketAddr;
-use tokio_util::sync::CancellationToken;
-use vetis::{errors::VetisError, Request, Response, VetisFutureResult, VetisHosts, VetisResult};
+use tokio::task::{self};
+use vetis::{
+    LogSender, Request, Response, VetisFutureResult, VetisHosts, VetisResult, debug, error,
+    errors::VetisError, info, log::Logger,
+};
 
 pub struct UdpWorker {
+    id: usize,
     hosts: VetisHosts<Host>,
-    token: CancellationToken,
+    logger: Option<Logger<LogSender>>,
+    receiver: MAsyncRx<Array<quinn::Connection>>,
 }
 
+unsafe impl Send for UdpWorker {}
+unsafe impl Sync for UdpWorker {}
+
 impl UdpWorker {
-    pub fn new(hosts: VetisHosts<Host>, token: CancellationToken) -> Self {
-        Self { hosts, token }
+    pub fn new(
+        id: usize,
+        hosts: VetisHosts<Host>,
+        logger: Option<Logger<LogSender>>,
+        receiver: MAsyncRx<Array<quinn::Connection>>,
+    ) -> Self {
+        Self { id, hosts, logger, receiver }
     }
 
-    pub async fn run(&mut self, stream: h3_quinn::quinn::Incoming) -> VetisResult<()> {
-        let conn = stream
-            .await
-            .map_err(|e| VetisError::Worker(e.to_string()))?;
+    pub fn id(&self) -> usize {
+        self.id
+    }
 
-        let client_addr = conn.remote_address();
-        let service = HttpService::new(self.hosts.clone(), client_addr);
-        let token = self.token.clone();
-        tokio::task::spawn(async move {
-            let builder = Builder::new();
-            tokio::select! {
-                _ = token.cancelled() => {
-                    debug!("HTTP/3 service stopping...");
-                },
-                _ = builder.serve_connection(conn, service) => {}
-            }
-        })
-        .await
-        .map_err(|e| VetisError::Worker(e.to_string()))
+    pub async fn run(&self) -> VetisResult<()> {
+        let logger = self.logger.clone();
+        info!(&self.logger, "UDP worker {} started", self.id);
+        while let Ok(udp_stream) = self
+            .receiver
+            .recv()
+            .await
+        {
+            let client_addr = udp_stream.remote_address();
+            let service = HttpService::new(self.hosts.clone(), client_addr, self.logger.clone());
+            let logger = logger.clone();
+            task::spawn(async move {
+                Builder::new()
+                    .serve_connection(udp_stream, service, logger)
+                    .await
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) -> VetisResult<()> {
+        Ok(())
     }
 }
 
@@ -49,10 +70,11 @@ impl Builder {
         Self {}
     }
 
-    pub async fn serve_connection(
+    async fn serve_connection(
         &self,
         stream: quinn::Connection,
         service: HttpService<Host>,
+        logger: Option<Logger<LogSender>>,
     ) -> VetisResult<()> {
         let mut h3_conn = Connection::new(QuinnConnection::new(stream))
             .await
@@ -97,10 +119,10 @@ impl Builder {
                             .await
                         {
                             Ok(_) => {
-                                debug!("Successfully respond to connection");
+                                debug!(logger, "Successfully respond to connection");
                             }
                             Err(err) => {
-                                error!("Unable to send response to connection: {:?}", err);
+                                error!(logger, "Unable to send response to connection: {:?}", err);
                             }
                         }
 
@@ -120,7 +142,11 @@ impl Builder {
                             .await
                             .map_err(|e| VetisError::Worker(e.to_string()))?;
                     } else {
-                        error!("HttpServer - Error serving connection: {:?}", response.err());
+                        error!(
+                            logger,
+                            "HttpServer - Error serving connection: {:?}",
+                            response.err()
+                        );
                     }
                 }
             } else {
@@ -134,15 +160,23 @@ impl Builder {
 struct HttpService<H> {
     hosts: VetisHosts<H>,
     client_addr: SocketAddr,
+    logger: Option<Logger<LogSender>>,
 }
+
+unsafe impl<H> Send for HttpService<H> {}
+unsafe impl<H> Sync for HttpService<H> {}
 
 impl<H> HttpService<H>
 where
     H: vetis::host::Host,
 {
     /// Create a new HttpService
-    pub fn new(hosts: VetisHosts<H>, client_addr: SocketAddr) -> Self {
-        HttpService { hosts: hosts.clone(), client_addr }
+    pub fn new(
+        hosts: VetisHosts<H>,
+        client_addr: SocketAddr,
+        logger: Option<Logger<LogSender>>,
+    ) -> Self {
+        HttpService { hosts: hosts.clone(), client_addr, logger }
     }
 }
 
@@ -158,6 +192,7 @@ where
 
     fn call(&self, req: http::request::Request<HttpBody>) -> Self::Future {
         let hosts = self.hosts.clone();
+        let logger = self.logger.clone();
         let client_addr = self
             .client_addr
             .clone();
@@ -170,7 +205,7 @@ where
                         .to_string()
                 })
             else {
-                error!("No hostname found in request");
+                error!(logger, "No hostname found in request");
                 let response = crate::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .text("No hostname found in request")
@@ -178,7 +213,7 @@ where
                 return Ok(response);
             };
 
-            debug!("Serving request for host: {}", hostname);
+            debug!(logger, "Serving request for host: {}", hostname);
             let hosts = hosts.pin_owned();
             let host = hosts.get(&hostname);
             if let Some(host) = host {
@@ -191,14 +226,15 @@ where
 
                 let uri = request
                     .uri()
-                    .clone();
+                    .path()
+                    .to_string();
 
                 let vetis_response = host
-                    .route(request)
+                    .route(request, logger.clone())
                     .await;
 
                 let response = if let Err(err) = vetis_response {
-                    error!("Error executing request: {:?}", err);
+                    error!(logger, "Error executing request: {:?}", err);
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .text("Internal server error")
@@ -213,14 +249,14 @@ where
                         .default_headers();
 
                     if let Some(default_headers) = default_headers {
-                        for (key, value) in default_headers {
+                        for (key, value) in default_headers.iter() {
                             let Ok(header_name) = HeaderName::from_bytes(key.as_bytes()) else {
-                                error!("Invalid header name: {}", key);
+                                error!(logger, "Invalid header name: {}", key);
                                 continue;
                             };
 
-                            let Ok(header_value) = HeaderValue::from_str(value.as_str()) else {
-                                error!("Invalid header value: {}", value);
+                            let Ok(header_value) = HeaderValue::from_str(value) else {
+                                error!(logger, "Invalid header value: {}", value);
                                 continue;
                             };
 
@@ -233,12 +269,11 @@ where
                     response
                 };
 
-                // TODO: Log request and its response status code (move it to oneshot channel?)
-                info!("{} {} {} {}", client_addr, method, uri, response.status());
+                info!(logger, "{} {} {} {}", client_addr, method, uri, response.status());
 
                 Ok::<_, VetisError>(response)
             } else {
-                error!("Host not found in request");
+                error!(logger, "Host not found in request");
                 let response = Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .text("Host not found")

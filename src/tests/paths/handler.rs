@@ -1,46 +1,35 @@
 use crate::{
-    host::{path::HandlerPath, Host},
-    listener::build_listeners,
-    tests::{default_protocol_version, CA_CERT, SERVER_CERT, SERVER_KEY},
+    host::{
+        Host,
+        path::{HandlerPath, handler_fn},
+    },
+    tests::{CA_CERT, SERVER_CERT, SERVER_KEY, default_protocol_version},
 };
 use deboa::{
     cert::{CertificateExt, ContentEncoding},
     request,
 };
-use deboa_tokio::{cert::DeboaCertificate, Client};
+use deboa_tokio::{Client, cert::DeboaCertificate};
 use http::StatusCode;
 use rand::random_range;
-use vetis::{
-    host::{handler_fn, HostConfig},
-    listener::ListenerConfig,
-    security::SecurityConfig,
-    VetisServer as _,
-};
+use vetis::{VetisServer as _, host::HostConfig, security::TlsConfig};
 
 #[tokio::test]
 async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
     let port = random_range(9000..=20000);
-    let ipv4 = ListenerConfig::builder()
-        .port(port)
-        .protos(vec![default_protocol_version()])
-        .interface(
-            "0.0.0.0"
-                .parse()
-                .unwrap(),
-        )
-        .build()?;
 
-    let security_config = SecurityConfig::builder()
-        .ca_cert_from_bytes(CA_CERT.to_vec())
-        .cert_from_bytes(SERVER_CERT.to_vec())
-        .key_from_bytes(SERVER_KEY.to_vec())
+    let security_config = TlsConfig::builder()
+        .ca_file(CA_CERT)
+        .cert_file(SERVER_CERT)
+        .key_file(SERVER_KEY)
         .build()?;
 
     let host_config = HostConfig::builder()
         .hostname("localhost")
-        .root_directory("src/tests".into())
-        .security(security_config)
-        .bind_addresses(vec![(
+        .root_directory(".")
+        .protos(&[default_protocol_version()])
+        .tls(security_config)
+        .bind_addresses(&[(
             "0.0.0.0"
                 .parse()
                 .unwrap(),
@@ -50,7 +39,7 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     let root_path = HandlerPath::builder()
         .uri("/hello")
-        .handler(handler_fn(|_request| async move {
+        .handler(handler_fn(|_request, _ctx| async move {
             let response = vetis::Response::builder()
                 .status(StatusCode::OK)
                 .text("Hello from localhost");
@@ -58,21 +47,22 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    let mut host = Host::new(host_config);
+    let mut host = Host::new(host_config).await?;
 
     host.add_path(root_path);
 
     let mut server = crate::Vetis::builder()
-        .add_listeners(build_listeners(ipv4))?
-        .add_host(host)?
+        .add_host(host)
+        .await?
         .build();
 
     server
         .start()
         .await?;
 
+    let cert = tokio::fs::read(CA_CERT).await?;
     let client = Client::builder()
-        .certificate(DeboaCertificate::from_slice(CA_CERT, ContentEncoding::DER))
+        .certificate(DeboaCertificate::from_slice(&cert, ContentEncoding::DER))
         .build();
 
     let request = request::get(format!("https://localhost:{}{}", port, "/hello"))?

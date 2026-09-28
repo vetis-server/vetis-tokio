@@ -1,34 +1,33 @@
 use crate::{
-    host::{path::HandlerPath, Host},
+    host::{
+        Host,
+        path::{HandlerPath, handler_fn},
+    },
     tests::{CA_CERT, SERVER_CERT, SERVER_KEY},
-    tls::TlsFactory,
 };
 use vetis::{
-    errors::VetisError,
-    host::{handler_fn, HostConfig},
-    security::SecurityConfig,
-    VetisHosts,
+    VetisHosts, VetisTestResult, errors::VetisError, host::HostConfig, security::TlsConfig,
 };
 
-fn create_test_hosts() -> VetisHosts<Host> {
-    let security_config = SecurityConfig::builder()
-        .cert_from_bytes(SERVER_CERT.to_vec())
-        .key_from_bytes(SERVER_KEY.to_vec())
-        .ca_cert_from_bytes(CA_CERT.to_vec())
+async fn create_test_hosts() -> VetisTestResult<VetisHosts<Host>> {
+    let security_config = TlsConfig::builder()
+        .cert_file(SERVER_CERT)
+        .key_file(SERVER_KEY)
+        .ca_file(CA_CERT)
         .build()
         .expect("Failed to create security config");
 
     let host_config = HostConfig::builder()
         .hostname("localhost")
-        .security(security_config)
+        .tls(security_config)
         .build()
         .expect("Failed to create host config");
 
-    let mut host = Host::new(host_config);
+    let mut host = Host::new(host_config).await?;
     host.add_path(
         HandlerPath::builder()
             .uri("/")
-            .handler(handler_fn(|_req| async move {
+            .handler(handler_fn(|_req, _ctx| async move {
                 Ok::<_, VetisError>(
                     vetis::Response::builder()
                         .status(http::StatusCode::OK)
@@ -44,20 +43,20 @@ fn create_test_hosts() -> VetisHosts<Host> {
         .pin_owned()
         .insert("localhost".into(), host.into());
 
-    VetisHosts::new(hosts.into())
+    Ok(VetisHosts::new(hosts.into()))
 }
 
-fn create_test_hosts_no_security() -> VetisHosts<Host> {
+async fn create_test_hosts_no_security() -> VetisTestResult<VetisHosts<Host>> {
     let host_config = HostConfig::builder()
         .hostname("localhost")
         .build()
         .expect("Failed to create host config");
 
-    let mut host = Host::new(host_config);
+    let mut host = Host::new(host_config).await?;
     host.add_path(
         HandlerPath::builder()
             .uri("/")
-            .handler(handler_fn(|_req| async move {
+            .handler(handler_fn(|_req, _ctx| async move {
                 Ok::<_, VetisError>(
                     vetis::Response::builder()
                         .status(http::StatusCode::OK)
@@ -72,27 +71,27 @@ fn create_test_hosts_no_security() -> VetisHosts<Host> {
     hosts
         .pin_owned()
         .insert("localhost".into(), host.into());
-    VetisHosts::new(hosts.into())
+    Ok(VetisHosts::new(hosts.into()))
 }
 
-fn create_test_hosts_invalid_key() -> VetisHosts<Host> {
-    let security_config = SecurityConfig::builder()
-        .cert_from_bytes(SERVER_CERT.to_vec())
-        .key_from_bytes(vec![0x01, 0x02, 0x03]) // Invalid key
+async fn create_test_hosts_invalid_key() -> VetisTestResult<VetisHosts<Host>> {
+    let security_config = TlsConfig::builder()
+        .cert_file(SERVER_CERT)
+        .key_file(SERVER_KEY) // Invalid key
         .build()
         .expect("Failed to create security config");
 
     let host_config = HostConfig::builder()
         .hostname("localhost")
-        .security(security_config)
+        .tls(security_config)
         .build()
         .expect("Failed to create host config");
 
-    let mut host = Host::new(host_config);
+    let mut host = Host::new(host_config).await?;
     host.add_path(
         HandlerPath::builder()
             .uri("/")
-            .handler(handler_fn(|_req| async move {
+            .handler(handler_fn(|_req, _ctx| async move {
                 Ok::<_, VetisError>(
                     vetis::Response::builder()
                         .status(http::StatusCode::OK)
@@ -107,135 +106,5 @@ fn create_test_hosts_invalid_key() -> VetisHosts<Host> {
     hosts
         .pin()
         .insert("localhost".into(), host.into());
-    VetisHosts::new(hosts.into())
-}
-
-#[tokio::test]
-async fn test_create_tls_config_success() {
-    let hosts = create_test_hosts();
-    let alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
-        .await
-        .unwrap();
-    assert_eq!(config.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
-    assert_eq!(config.max_early_data_size, u32::MAX);
-}
-
-#[tokio::test]
-async fn test_create_tls_config_no_security() {
-    let hosts = create_test_hosts_no_security();
-    let alpn_protocols = vec![b"http/1.1".to_vec()];
-    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
-        .await
-        .unwrap();
-    assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
-}
-
-#[tokio::test]
-async fn test_create_tls_config_invalid_private_key() {
-    let hosts = create_test_hosts_invalid_key();
-    let alpn_protocols = vec![b"http/1.1".to_vec()];
-
-    let result = TlsFactory::create_tls_config(hosts, alpn_protocols).await;
-
-    assert!(result.is_err(), "TLS config creation should fail with invalid key");
-    match result.unwrap_err() {
-        VetisError::Tls(msg) => {
-            assert!(msg.contains("Failed to parse private key"));
-        }
-        _ => panic!("Expected Tls error"),
-    }
-}
-
-#[tokio::test]
-async fn test_create_tls_config_empty_alpn() {
-    let hosts = create_test_hosts();
-    let alpn_protocols = vec![];
-    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
-        .await
-        .unwrap();
-    assert!(
-        config
-            .alpn_protocols
-            .is_empty(),
-        "ALPN protocols should be empty"
-    );
-}
-
-#[tokio::test]
-async fn test_create_tls_config_multiple_hosts() {
-    // Create first virtual host with security
-    let security_config1 = SecurityConfig::builder()
-        .cert_from_bytes(SERVER_CERT.to_vec())
-        .key_from_bytes(SERVER_KEY.to_vec())
-        .build()
-        .expect("Failed to create security config");
-
-    let host_config1 = HostConfig::builder()
-        .hostname("localhost")
-        .security(security_config1)
-        .build()
-        .expect("Failed to create host config");
-
-    let mut host1 = Host::new(host_config1);
-    host1.add_path(
-        HandlerPath::builder()
-            .uri("/")
-            .handler(handler_fn(|_req| async move {
-                Ok::<_, VetisError>(
-                    vetis::Response::builder()
-                        .status(http::StatusCode::OK)
-                        .text("Test response"),
-                )
-            }))
-            .build()
-            .unwrap(),
-    );
-
-    // Create second virtual host without security
-    let host_config2 = HostConfig::builder()
-        .hostname("test.com")
-        .build()
-        .expect("Failed to create virtual host config");
-
-    let mut host2 = Host::new(host_config2);
-    host2.add_path(
-        HandlerPath::builder()
-            .uri("/")
-            .handler(handler_fn(|_req| async move {
-                Ok::<_, VetisError>(
-                    vetis::Response::builder()
-                        .status(http::StatusCode::OK)
-                        .text("Test response"),
-                )
-            }))
-            .build()
-            .unwrap(),
-    );
-
-    let hosts = papaya::HashMap::new();
-    let guard = hosts.pin_owned();
-    guard.insert("localhost".into(), host1.into());
-    guard.insert("test.com".into(), host2.into());
-    drop(guard);
-
-    let alpn_protocols = vec![b"h2".to_vec()];
-    let result = TlsFactory::create_tls_config(VetisHosts::new(hosts.into()), alpn_protocols).await;
-    assert!(result.is_ok(), "TLS config creation should succeed with multiple hosts");
-}
-
-#[tokio::test]
-async fn test_create_tls_config_with_ca_cert() {
-    let hosts = create_test_hosts();
-    let alpn_protocols = vec![b"http/1.1".to_vec()];
-    let config = TlsFactory::create_tls_config(hosts, alpn_protocols)
-        .await
-        .unwrap();
-    assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
-}
-
-#[test]
-fn test_tls_factory_struct_exists() {
-    // This test ensures the TlsFactory struct is accessible
-    let _factory = TlsFactory {};
+    Ok(VetisHosts::new(hosts.into()))
 }

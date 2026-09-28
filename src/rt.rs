@@ -1,25 +1,140 @@
-use crate::{host::Host, listener::Listener};
+#[cfg(feature = "http3")]
+use crate::listener::udp::UdpListener;
+use crate::{
+    host::Host,
+    listener::{Listener, tcp::TcpListener},
+    worker::log::LogWorker,
+};
+use crossfire::mpsc;
+use http::Version;
 use log::info;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    thread::{self, JoinHandle},
+};
 use vetis::{
+    VetisResult,
     errors::{ListenerError, VetisError},
     host::Host as _,
-    listener::Listener as _,
+    listener::{Listener as _, ListenerConfig},
+    log::{LogMessage, Logger},
     server::ServerConfig,
-    VetisResult,
 };
+
+async fn add_host_to_listeners(
+    host: Arc<Host>,
+    listeners: &mut Vec<Listener>,
+    workers: usize,
+) -> VetisResult<()> {
+    let host_config = host.config();
+
+    // Check protos for this host
+    let has_tcp_listener = host_config
+        .protos()
+        .contains(&Version::HTTP_11)
+        || host_config
+            .protos()
+            .contains(&Version::HTTP_2);
+    #[cfg(feature = "http3")]
+    let has_udp_listener = host_config
+        .protos()
+        .contains(&Version::HTTP_3);
+
+    // Bind hosts to listeners
+    let host = host.clone();
+    for bind_address in host_config
+        .bind_addresses()
+        .iter()
+    {
+        let listener_config = ListenerConfig::builder()
+            .interface(bind_address.0)
+            .port(bind_address.1)
+            .workers(workers)
+            .build()?;
+        #[cfg(feature = "http3")]
+        let mut port = 0;
+        if has_tcp_listener {
+            let mut listener = Listener::Tcp(TcpListener::new(listener_config.clone()));
+            if listener
+                .config()
+                .port()
+                == 0
+            {
+                listener
+                    .reserve_port()
+                    .await?;
+                #[cfg(feature = "http3")]
+                {
+                    port = listener
+                        .config()
+                        .port();
+                }
+            }
+
+            let elem = listeners
+                .iter()
+                .position(|l: &Listener| l == &listener);
+            let host = host.clone();
+            if let Some(index) = elem {
+                listeners[index].add_host(host.into())?;
+            } else {
+                listener.add_host(host.into())?;
+                listeners.push(listener);
+            }
+        }
+
+        #[cfg(feature = "http3")]
+        if has_udp_listener {
+            let mut listener = Listener::Udp(UdpListener::new(listener_config.clone()));
+            // UDP is asking for reserve port and not port has been assigned to TCP
+            if port == 0
+                && listener
+                    .config()
+                    .port()
+                    == 0
+            {
+                listener
+                    .reserve_port()
+                    .await?;
+            } else {
+                listener.reassign_port(port);
+            }
+
+            let elem = listeners
+                .iter()
+                .position(|l| l == &listener);
+            let host = host.clone();
+            if let Some(index) = elem {
+                listeners[index].add_host(host.into())?;
+            } else {
+                listener.add_host(host.into())?;
+                listeners.push(listener);
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Builder for a vetis instance
 pub struct VetisBuilder {
+    pub(crate) config: ServerConfig,
     pub(crate) listeners: Vec<Listener>,
 }
 
 impl VetisBuilder {
-    /// Adds listeners to the server.
-    pub fn add_listeners(mut self, listeners: Vec<Listener>) -> VetisResult<Self> {
-        self.listeners
-            .extend(listeners);
-        Ok(self)
+    /// Allow set server config
+    ///
+    /// You can either add a complete server configuration
+    /// here including hosts, or only workers, log and log
+    /// queue size.
+    ///
+    /// This method is useful to add extra config settings
+    /// to server when dealing with HandlerPath instances
+    /// which are not serializable.
+    pub fn config(mut self, config: ServerConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// Adds a host to the server.
@@ -37,19 +152,12 @@ impl VetisBuilder {
     /// use http::{StatusCode, Version};
     /// use vetis::{
     ///     server::ServerConfig,
-    ///     host::{path::Path, handler_fn, HostConfig},
+    ///     host::{path::Path, HostConfig},
     /// };
     /// use vetis_tokio::{
-    ///     host::{Host, path::HandlerPath},
-    ///     listener::build_listeners,
+    ///     host::{Host, path::{HandlerPath, handler_fn}},
     ///     Vetis, VetisServer as _
     /// };
-    ///
-    /// let https = ListenerConfig::builder()
-    ///     .port(8443)
-    ///     .protos(vec![Version::HTTP_11])
-    ///     .interface("0.0.0.0".parse().unwrap())
-    ///     .build()?;
     ///
     /// let host_config = HostConfig::builder()
     ///     .hostname("example.com")
@@ -61,7 +169,7 @@ impl VetisBuilder {
     ///     )])
     ///     .build()?;
     ///
-    /// let mut host = Host::new(host_config);
+    /// let mut host = Host::new(host_config).await?;
     ///
     /// let mut root_path = HandlerPath::builder()
     ///     .uri("/")
@@ -75,44 +183,26 @@ impl VetisBuilder {
     ///
     /// host.add_path(root_path);
     /// let server = Vetis::builder()
-    ///     .add_listeners(build_listeners(https))?
     ///     .add_host(host)?
     ///     .build();
     ///
     /// Ok::<(), vetis::errors::VetisError>(())
     /// ```
-    pub fn add_host(mut self, host: Host) -> VetisResult<Self> {
-        if self
-            .listeners
-            .is_empty()
-        {
-            return Err(VetisError::Listener(ListenerError::NoListeners));
-        }
-
+    pub async fn add_host(mut self, host: Host) -> VetisResult<Self> {
         let host = Arc::new(host);
-        for bind_address in host
-            .config()
-            .bind_addresses()
-        {
-            let mut listeners = self
-                .listeners
-                .iter_mut()
-                .filter(|listener| {
-                    let config = listener.config();
-                    *config.interface() == bind_address.0 && config.port() == bind_address.1
-                });
-
-            while let Some(listener) = listeners.next() {
-                listener.add_host(host.clone())?;
-            }
-        }
-
+        add_host_to_listeners(
+            host,
+            &mut self.listeners,
+            self.config
+                .workers(),
+        )
+        .await?;
         Ok(self)
     }
 
     /// Build a new vetis instance
     pub fn build(self) -> Vetis {
-        Vetis { config: ServerConfig::default(), listeners: self.listeners }
+        Vetis { config: self.config, listeners: self.listeners, logger: None }
     }
 }
 
@@ -144,7 +234,8 @@ impl VetisBuilder {
 /// ```
 pub struct Vetis {
     config: ServerConfig,
-    pub(crate) listeners: Vec<Listener>,
+    listeners: Vec<Listener>,
+    logger: Option<JoinHandle<()>>,
 }
 
 impl Vetis {
@@ -165,19 +256,33 @@ impl Vetis {
     ///
     /// Ok::<(), vetis::errors::VetisError>(())
     /// ```
-    pub fn new(config: ServerConfig) -> Vetis {
-        Vetis { config, listeners: Vec::new() }
+    pub async fn from_config(config: ServerConfig) -> VetisResult<Vetis> {
+        let mut listeners = Vec::new();
+        for host_config in config
+            .hosts()
+            .iter()
+        {
+            let host = Arc::new(Host::new(host_config.clone()).await?);
+            add_host_to_listeners(host, &mut listeners, config.workers()).await?;
+        }
+
+        Ok(Vetis { config, listeners, logger: None })
+    }
+
+    /// Return all listeners managed by server
+    pub fn listeners(&self) -> &Vec<Listener> {
+        &self.listeners
     }
 
     /// Create a new vetis instance builder
     pub fn builder() -> VetisBuilder {
-        VetisBuilder { listeners: Vec::new() }
+        VetisBuilder { listeners: Vec::new(), config: ServerConfig::default() }
     }
 }
 
 impl From<Vec<Listener>> for Vetis {
     fn from(value: Vec<Listener>) -> Self {
-        Vetis { config: ServerConfig::default(), listeners: value }
+        Vetis { config: ServerConfig::default(), listeners: value, logger: None }
     }
 }
 
@@ -193,15 +298,6 @@ impl vetis::VetisServer for Vetis {
     /// configured when the server was created.
     fn config(&self) -> &ServerConfig {
         &self.config
-    }
-
-    /// Returns a mut reference to the server configuration.
-    ///
-    /// This method provides access to the listeners and global settings
-    /// configured when the server was created, allowing them to
-    /// be modified.
-    fn config_mut(&mut self) -> &mut ServerConfig {
-        &mut self.config
     }
 
     /// Starts the server and runs until interrupted.
@@ -266,13 +362,7 @@ impl vetis::VetisServer for Vetis {
                 acc
             });
 
-        info!("Server listening on: {}", addresses);
-
-        let _ = tokio::signal::ctrl_c().await;
-
-        info!("\nStopping server...");
-
-        self.stop().await?;
+        info!(target: "vetis", "Server listening on: {}", addresses);
 
         Ok(())
     }
@@ -318,11 +408,33 @@ impl vetis::VetisServer for Vetis {
             return Err(VetisError::Listener(ListenerError::NoListeners));
         }
 
-        for listener in &mut self.listeners {
+        info!(target: "vetis", "Starting logger...");
+        let (log_sender, log_receiver) = mpsc::bounded_async_blocking::<LogMessage>(
+            self.config
+                .logger_queue_size(),
+        );
+
+        let log_worker = LogWorker::new(log_receiver);
+        let logger_handle = thread::spawn(move || {
+            let res = log_worker.run();
+            if res.is_ok() {
+                info!(target: "vetis", "Logger stopped successfully!")
+            }
+        });
+        self.logger = Some(logger_handle);
+
+        info!(target: "vetis", "Starting listeners...");
+        for listener in self
+            .listeners
+            .iter_mut()
+        {
+            let logger = Logger::new(log_sender.clone());
+            listener.logger(logger);
             listener
                 .listen()
                 .await?;
         }
+
         Ok(())
     }
 
@@ -367,6 +479,10 @@ impl vetis::VetisServer for Vetis {
                 .stop()
                 .await?
         }
+
+        self.listeners
+            .clear();
+
         Ok(())
     }
 

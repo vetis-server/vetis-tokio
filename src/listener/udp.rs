@@ -1,23 +1,65 @@
-use crate::{host::Host, tls::TlsFactory, worker::udp::UdpWorker, VetisHosts};
+use crate::{VetisHosts, host::Host, tls::TlsFactory, worker::udp::UdpWorker};
+use crossfire::{
+    MAsyncRx, MAsyncTx,
+    mpmc::{self, Array},
+};
 use h3_quinn::quinn::{self, crypto::rustls::QuicServerConfig};
-use log::{debug, error, info};
 use papaya::HashMap;
-use quinn::Endpoint;
-use std::{net::SocketAddr, sync::Arc};
-use tokio_util::sync::CancellationToken;
+use quinn::{Connection, Endpoint};
+use std::{hash::Hash, net::SocketAddr, sync::Arc};
+use tokio::{
+    sync::watch,
+    task::{JoinHandle, JoinSet},
+};
 use vetis::{
+    LogSender, VetisResult, error,
     errors::{ListenerError, StartError, VetisError},
     host::Host as _,
+    info,
     listener::ListenerConfig,
-    Alpn, VetisResult,
+    log::Logger,
 };
-
 /// UDP listener
 pub struct UdpListener {
     config: ListenerConfig,
-    pub(crate) hosts: VetisHosts<Host>,
-    token: Option<CancellationToken>,
+    hosts: VetisHosts<Host>,
+    signal: Option<watch::Sender<bool>>,
     inner: Option<Endpoint>,
+    logger: Option<Logger<LogSender>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Hash for UdpListener {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.config
+            .port()
+            .hash(state);
+        self.config
+            .interface()
+            .hash(state);
+    }
+}
+
+impl PartialEq for UdpListener {
+    fn eq(&self, other: &Self) -> bool {
+        self.config.port() == other.config.port()
+            && self
+                .config
+                .interface()
+                == other
+                    .config
+                    .interface()
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.config.port() != other.config.port()
+            && self
+                .config
+                .interface()
+                != other
+                    .config
+                    .interface()
+    }
 }
 
 impl UdpListener {
@@ -31,7 +73,14 @@ impl UdpListener {
     ///
     /// * `Self` - A new `UdpListener` instance.
     pub fn new(config: ListenerConfig) -> Self {
-        Self { config, hosts: VetisHosts::new(HashMap::new()), token: None, inner: None }
+        Self {
+            config,
+            hosts: VetisHosts::new(HashMap::new()),
+            signal: None,
+            inner: None,
+            logger: None,
+            handle: None,
+        }
     }
 
     async fn create_inner_listener(&mut self) -> VetisResult<Endpoint> {
@@ -42,18 +91,7 @@ impl UdpListener {
             self.config.port(),
         );
 
-        let alpn_protos: Vec<Vec<u8>> = self
-            .config
-            .alpn_protos()
-            .iter()
-            .filter(|val| match val {
-                Alpn::H3 | Alpn::Doq => true,
-                _ => false,
-            })
-            .map(|val| val.into())
-            .collect();
-
-        let tls_config = TlsFactory::create_tls_config(self.hosts.clone(), alpn_protos).await?;
+        let tls_config = TlsFactory::create_tls_config(self.hosts.clone()).await?;
         let quic_config = QuicServerConfig::try_from(tls_config)
             .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
         let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
@@ -65,12 +103,8 @@ impl UdpListener {
 
 impl vetis::listener::Listener for UdpListener {
     type RuntimeHost = Host;
+    type Logger = Logger<LogSender>;
 
-    /// Add a new host
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - A host instance.
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
         let hosts = self
@@ -80,17 +114,16 @@ impl vetis::listener::Listener for UdpListener {
         Ok(())
     }
 
-    /// Add a new host
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - A host instance.
     fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
         let hosts = self
             .hosts
             .pin_owned();
         hosts.remove(hostname);
         Ok(())
+    }
+
+    fn logger(&mut self, logger: Self::Logger) {
+        self.logger = Some(logger);
     }
 
     fn total_hosts(&self) -> usize {
@@ -116,16 +149,17 @@ impl vetis::listener::Listener for UdpListener {
         Ok(())
     }
 
+    fn reassign_port(&mut self, port: u16) {
+        self.config
+            .reassign_port(port);
+    }
+
     fn config(&self) -> &ListenerConfig {
         &self.config
     }
 
-    /// Listen for incoming connections
-    ///
-    /// # Returns
-    ///
-    /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
     async fn listen(&mut self) -> VetisResult<()> {
+        info!(&self.logger, "UDP listener started...");
         let listener = if let Some(listener) = self.inner.take() {
             listener
         } else {
@@ -133,32 +167,42 @@ impl vetis::listener::Listener for UdpListener {
                 .await?
         };
 
-        let dispatcher_token = CancellationToken::new();
-        let token = dispatcher_token.clone();
-        let mut dispatcher =
-            ConnectionDispatcher::new(listener, self.hosts.clone(), dispatcher_token.child_token());
-        tokio::spawn(async move {
+        let (shut_sender, shut_recv) = watch::channel(false);
+        let mut shut_signal = shut_recv.clone();
+        let logger = self.logger.clone();
+        let mut dispatcher = ConnectionDispatcher::new(
+            listener,
+            self.hosts.clone(),
+            self.config.clone(),
+            self.logger.clone(),
+        );
+        let handle = tokio::spawn(async move {
             tokio::select! {
-                _ = token.cancelled() => {
-                    info!("Listener stopping");
+                _ = shut_signal.changed() => {
+                    info!(logger, "Stopping listener...");
+                    let _ = dispatcher.stop().await;
                 }
-                _ = dispatcher.dispatch_connections() => ()
+                _ = dispatcher.run() => ()
             }
         });
 
-        self.token = Some(dispatcher_token);
+        self.signal = Some(shut_sender);
+        self.handle = Some(handle);
 
         Ok(())
     }
 
-    /// Stop the listener
-    ///
-    /// # Returns
-    ///
-    /// * `ListenerResult<'_, ()>` - A `ListenerResult` instance containing the result of the listener.
     async fn stop(&mut self) -> VetisResult<()> {
-        if let Some(token) = self.token.take() {
-            token.cancel();
+        if let Some(signal) = self.signal.take() {
+            let _ = signal.send(true);
+            if let Some(handle) = self.handle.take() {
+                match handle.await {
+                    Ok(_) => info!(&self.logger, "UDP Listener stopped successfully!"),
+                    Err(e) => {
+                        error!(self.logger, "Error while stopping listener: {}", e.to_string())
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -167,54 +211,126 @@ impl vetis::listener::Listener for UdpListener {
 struct ConnectionDispatcher {
     listener: quinn::Endpoint,
     hosts: VetisHosts<Host>,
-    token: CancellationToken,
+    signal: Option<watch::Sender<bool>>,
+    config: ListenerConfig,
+    logger: Option<Logger<LogSender>>,
+    workers: JoinSet<()>,
+    sender: Option<MAsyncTx<Array<Connection>>>,
 }
 
 impl ConnectionDispatcher {
     pub fn new(
         listener: quinn::Endpoint,
         hosts: VetisHosts<Host>,
-        token: CancellationToken,
+        config: ListenerConfig,
+        logger: Option<Logger<LogSender>>,
     ) -> Self {
-        Self { listener, hosts, token }
+        Self {
+            listener,
+            hosts,
+            signal: None,
+            config,
+            logger,
+            workers: JoinSet::new(),
+            sender: None,
+        }
     }
 
-    async fn dispatch_connections(&mut self) -> VetisResult<()> {
+    async fn init(&mut self, receiver: MAsyncRx<Array<Connection>>) -> VetisResult<()> {
+        info!(&self.logger, "Initializing udp workers...");
+        let (shut_sender, shut_recv) = watch::channel(false);
+
+        for worker_num in 1..=self
+            .config
+            .workers()
+        {
+            info!(&self.logger, "Initializing udp worker: {}", worker_num);
+            let mut worker = UdpWorker::new(
+                worker_num,
+                self.hosts.clone(),
+                self.logger.clone(),
+                receiver.clone(),
+            );
+
+            let mut shut_signal = shut_recv.clone();
+            let logger = self.logger.clone();
+            let worker_future = async move {
+                tokio::select! {
+                    _ = shut_signal.changed() => {
+                        info!(logger, "Stopping udp worker {}...", worker.id());
+                        let _ = worker.stop().await;
+                    },
+                    _ = worker.run() => {}
+                }
+            };
+
+            self.workers
+                .spawn(worker_future);
+        }
+
+        self.signal = Some(shut_sender);
+
+        Ok(())
+    }
+
+    async fn run(&mut self) -> VetisResult<()> {
+        let (dispatch_sender, dispatch_recv) = mpmc::bounded_async::<Connection>(
+            self.config
+                .workers(),
+        );
+
+        if let Err(e) = self
+            .init(dispatch_recv.clone())
+            .await
+        {
+            error!(self.logger, "Could not start workers: {}", e.to_string())
+        }
+
+        self.sender = Some(dispatch_sender);
+
         while let Some(new_conn) = self
             .listener
             .accept()
             .await
         {
-            let mut worker = UdpWorker::new(
-                self.hosts.clone(),
-                self.token
-                    .child_token(),
-            );
-            let token = self.token.clone();
-            let handle = tokio::spawn(async move {
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        debug!("Worker stopping..");
-                    },
-                    _ = worker.run(new_conn) => {}
-                }
-            });
+            let conn = new_conn
+                .await
+                .map_err(|e| VetisError::Worker(e.to_string()))?;
 
-            match handle.await {
-                Ok(_) => {
-                    debug!("Worker successfully stopped..");
-                    continue;
-                }
-                Err(e) => {
-                    error!("Internal error: {:?}", e);
-                    continue;
-                }
+            if let Some(sender) = self.sender.as_ref()
+                && let Err(e) = sender
+                    .send(conn)
+                    .await
+            {
+                error!(self.logger, "Could not distribute connection: {}", e.to_string())
             }
         }
 
         self.listener
             .wait_idle()
             .await;
+
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) -> VetisResult<()> {
+        if let Some(signal) = self.signal.take() {
+            let _ = signal.send(true);
+        }
+        while let Some(handle) = self
+            .workers
+            .join_next()
+            .await
+        {
+            match handle {
+                Ok(_) => {
+                    info!(&self.logger, "UDP worker stopped successfully!");
+                }
+                Err(e) => {
+                    error!(self.logger, "Internal error: {:?}", e);
+                }
+            }
+        }
 
         Ok(())
     }

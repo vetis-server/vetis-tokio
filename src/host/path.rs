@@ -1,14 +1,69 @@
-//! Path module for handling different types of paths in the server
+//! Path module
 use std::sync::Arc;
 use vetis::{
+    Request, Response, VetisFutureResult, VetisResult,
     errors::{HandlerError, HostError, VetisError},
-    host::path::Path,
-    HandlerFn, Request, Response, VetisFutureResult,
+    host::{HostContext, path::Path},
 };
+
+/// Type alias for boxed handler closures.
+///
+/// This represents an async function that takes a `Request` and returns
+/// a `Response` or an error. Handlers are the core of request processing
+/// in VeTiS hosts.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use vetis::HandlerFn;
+/// use vetis::{Request, Response, errors::VetisError};
+///
+/// let handler: HandlerFn = Box::new(|request: Request| {
+///     Box::pin(async move {
+///         // Process request...
+///         Ok(Response::builder()
+///             .status(http::StatusCode::OK)
+///             .text("OK"))
+///     })
+/// });
+/// ```
+pub type HandlerFn =
+    Box<dyn Fn(Request, HostContext) -> VetisFutureResult<'static, Response> + Send + Sync>;
+
+/// Creates a handler function from a function.
+///
+/// This utility function converts any compatible async function into a
+/// `HandlerFn` that can be used with hosts.
+///
+/// # Arguments
+///
+/// * `f` - An async function that takes a `Request` and returns a `VetisResult<Response>`
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use vetis::{
+///     host::{handler_fn, HostConfig},
+/// };
+///
+/// let config = HostConfig::builder()
+///     .hostname("example.com")
+///     .build()
+///     .unwrap();
+///
+/// assert_eq!("example.com", config.hostname());
+/// ```
+pub fn handler_fn<F, Fut>(f: F) -> HandlerFn
+where
+    F: Fn(Request, HostContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = VetisResult<Response>> + Send + Sync + 'static,
+{
+    Box::new(move |req, ctx| Box::pin(f(req, ctx)))
+}
 
 /// Builder for handler path
 pub struct HandlerPathBuilder {
-    uri: Arc<String>,
+    uri: Arc<str>,
     handler: Option<HandlerFn>,
 }
 
@@ -58,17 +113,17 @@ impl HandlerPathBuilder {
             None => {
                 return Err(VetisError::Host(HostError::Handler(HandlerError::Handler(
                     "Handler must be set".to_string(),
-                ))))
+                ))));
             }
         };
 
-        Ok(HandlerPath { uri: self.uri, handler })
+        Ok(HandlerPath { uri: self.uri.into(), handler })
     }
 }
 
 /// Handler path
 pub struct HandlerPath {
-    uri: Arc<String>,
+    uri: Arc<str>,
     handler: HandlerFn,
 }
 
@@ -79,7 +134,7 @@ impl HandlerPath {
     ///
     /// * `HandlerPathBuilder` - The builder
     pub fn builder() -> HandlerPathBuilder {
-        HandlerPathBuilder { uri: Arc::from("/".to_string()), handler: None }
+        HandlerPathBuilder { uri: "/".into(), handler: None }
     }
 }
 
@@ -98,7 +153,7 @@ impl Path for HandlerPath {
     /// # Arguments
     ///
     /// * `request` - The request to handle
-    /// * `uri` - The URI of the path
+    /// * `host_context` - The host context for this path
     ///'
     /// # Returns
     ///
@@ -106,8 +161,8 @@ impl Path for HandlerPath {
     fn handle<'a>(
         &'a self,
         request: Request,
-        _uri: Arc<String>,
+        host_context: HostContext,
     ) -> VetisFutureResult<'a, Response> {
-        (self.handler)(request)
+        (self.handler)(request, host_context)
     }
 }

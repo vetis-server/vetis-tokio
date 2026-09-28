@@ -7,27 +7,161 @@ use http::StatusCode;
 use http_body_util::StreamBody;
 use hyper::body::Frame;
 use hyper_body_utils::HttpBody;
-use radix_trie::Trie;
-use std::sync::Arc;
-use tokio::fs::File;
-use tokio_util::io::ReaderStream;
+use std::{path::PathBuf, sync::Arc};
+use tokio::fs::{self, File};
 use vetis::{
-    errors::{FileError, HostError, VetisError},
-    host::{path::Path, HostConfig},
-    Request, Response, VetisFutureResult,
+    LogSender, Request, Response, VetisFutureResult, VetisPathRouter, VetisResult, debug, error,
+    errors::{ConfigError, ContentError, HostError, VetisError},
+    host::{HostConfig, HostContext, path::Path},
+    log::Logger,
+    security::Tls,
 };
+
+use crate::io::ReaderStream;
 
 pub mod path;
 
 /// Host type
 pub struct Host {
     config: HostConfig,
-    paths: Trie<String, Arc<Box<dyn Path>>>,
+    paths: VetisPathRouter<Box<dyn Path + Send + Sync>>,
+    tls: Option<Tls>,
+}
+
+unsafe impl Send for Host {}
+unsafe impl Sync for Host {}
+
+impl Host {
+    /// Create a new host
+    ///
+    /// # Arguments
+    ///
+    /// * `host_config` - A `HostConfig` instance containing the host configuration.
+    ///
+    /// # Returns
+    ///
+    /// * `VetisResult<Self>` - A new `Host` instance.
+    pub async fn new(host_config: HostConfig) -> VetisResult<Self> {
+        let tls = if let Some(security_config) = host_config.tls() {
+            if let Some(root_dir) = host_config.root_directory() {
+                let cert_path = if security_config
+                    .cert_file()
+                    .is_relative()
+                {
+                    PathBuf::from_iter([root_dir, security_config.cert_file()])
+                } else {
+                    security_config
+                        .cert_file()
+                        .to_path_buf()
+                };
+                let cert = fs::read(cert_path)
+                    .await
+                    .map_err(|e| {
+                        VetisError::Config(ConfigError::Tls(format!(
+                            "Could not load certificate: {}",
+                            e.to_string()
+                        )))
+                    })?;
+                let key_path = if security_config
+                    .cert_file()
+                    .is_relative()
+                {
+                    PathBuf::from_iter([root_dir, security_config.key_file()])
+                } else {
+                    security_config
+                        .key_file()
+                        .to_path_buf()
+                };
+                let key = fs::read(&key_path)
+                    .await
+                    .map_err(|e| {
+                        VetisError::Config(ConfigError::Tls(format!(
+                            "Could not load key: {}",
+                            e.to_string()
+                        )))
+                    })?;
+                Some(Tls::from_cert_and_key(&cert, &key))
+            } else {
+                let cert = fs::read(security_config.cert_file())
+                    .await
+                    .map_err(|e| {
+                        VetisError::Config(ConfigError::Tls(format!(
+                            "Could not load certificate: {}",
+                            e.to_string()
+                        )))
+                    })?;
+
+                let key = fs::read(security_config.key_file())
+                    .await
+                    .map_err(|e| {
+                        VetisError::Config(ConfigError::Tls(format!(
+                            "Could not load key: {}",
+                            e.to_string()
+                        )))
+                    })?;
+
+                Some(Tls::from_cert_and_key(&cert, &key))
+            }
+        } else {
+            None
+        };
+
+        let mut paths = VetisPathRouter::new();
+        for path_config in host_config
+            .paths()
+            .iter()
+        {
+            let path = path_config.boxed_sync();
+            paths.insert(
+                path.uri()
+                    .to_owned(),
+                Arc::new(path),
+            );
+        }
+
+        Ok(Self { config: host_config, paths, tls })
+    }
+
+    /// Add a path to the host
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - A `HostPath` instance containing the path configuration.
+    pub fn add_path<P>(&mut self, path: P)
+    where
+        P: Path + Send + Sync + 'static,
+    {
+        self.paths.insert(
+            path.uri()
+                .to_string(),
+            Arc::new(Box::new(path)),
+        );
+    }
+
+    /// Add tls
+    ///
+    /// # Arguments
+    ///
+    /// * `tls` - A `Tls` instance containing certicates.
+    pub fn add_tls(&mut self, tls: Tls) {
+        self.tls = Some(tls);
+    }
+
+    /// Returns security info about host
+    ///
+    /// # Returns
+    ///
+    /// * `Option<Tls>` - Some or None if TLS is set or not
+    pub fn tls(&self) -> &Option<Tls> {
+        &self.tls
+    }
 }
 
 impl vetis::host::Host for Host {
-    fn paths(&self) -> Trie<String, Arc<Box<dyn Path>>> {
-        self.paths.clone()
+    type Path = Box<dyn Path + Send + Sync>;
+
+    fn paths(&self) -> &VetisPathRouter<Self::Path> {
+        &self.paths
     }
 
     fn config(&self) -> &HostConfig {
@@ -38,14 +172,18 @@ impl vetis::host::Host for Host {
         &mut self.config
     }
 
-    fn serve_status_page<'a>(&'a self, status: u16) -> VetisFutureResult<'a, Response> {
+    fn serve_status_page<'a>(
+        &'a self,
+        status: u16,
+        logger: Option<Logger<LogSender>>,
+    ) -> VetisFutureResult<'a, Response> {
         let future = async move {
             let status_code = match StatusCode::from_u16(status) {
                 Ok(code) => code,
                 Err(_) => {
-                    return Err(VetisError::Host(HostError::Interface(
+                    return Err(VetisError::Host(HostError::Content(ContentError::ServerError(
                         "Invalid status code".to_string(),
-                    )))
+                    ))));
                 }
             };
 
@@ -66,8 +204,8 @@ impl vetis::host::Host for Host {
                         .config
                         .root_directory()
                     {
-                        let file = dir.join(page);
-                        if dir.exists() {
+                        let file = dir.join(page.to_string());
+                        if file.exists() {
                             let result = File::open(file).await;
                             if let Ok(data) = result {
                                 let content = ReaderStream::new(data).map_ok(Frame::data);
@@ -76,9 +214,13 @@ impl vetis::host::Host for Host {
                                     .status(status_code)
                                     .body(HttpBody::from_generic_stream(body)));
                             }
+                        } else {
+                            error!(logger, target: self.config.hostname(), "Could not find status page!");
                         }
                     }
                 }
+            } else {
+                error!(logger, target: self.config.hostname(), "No configured status pages!");
             }
             Ok(static_status_response)
         };
@@ -93,54 +235,90 @@ impl vetis::host::Host for Host {
     ///
     /// # Returns
     ///
-    /// * `Pin<Box<dyn Future<Output = Result<Response, VetisError>> + Send>>` - A pinned box containing the future that will resolve to a `Result<Response, VetisError>`.
-    fn route<'a>(&'a self, request: Request) -> VetisFutureResult<'a, Response>
-    where
-        Self: Sync,
-    {
+    /// * `Pin<Box<dyn Future<Output = Result<Response, VetisError>> + Send>>` - A pinned box
+    ///    containing the future that will resolve to a `Result<Response, VetisError>`.
+    fn route<'a>(
+        &'a self,
+        request: Request,
+        logger: Option<Logger<LogSender>>,
+    ) -> VetisFutureResult<'a, Response> {
         let uri_path: String = request
             .uri()
             .path()
             .into();
 
         if uri_path.starts_with("..") {
-            return self.serve_status_page(http::StatusCode::FORBIDDEN.as_u16());
+            return Box::pin(async move {
+                debug!(logger, "Invalid access!");
+                self.serve_status_page(http::StatusCode::FORBIDDEN.as_u16(), logger)
+                    .await
+            });
         }
 
         let paths = self.paths();
-        let matches = paths.get_ancestor_value(&uri_path);
-        let Some(path) = matches else {
-            return self.serve_status_page(http::StatusCode::NOT_FOUND.as_u16());
+        let matches = paths.get(&uri_path);
+        let path = if let Some(path) = matches {
+            path
+        } else {
+            let matches = paths.get_longest_common_prefix(&uri_path);
+            let Some(path) = matches else {
+                return Box::pin(async move {
+                    debug!(logger, "Could not find host path!");
+                    self.serve_status_page(http::StatusCode::NOT_FOUND.as_u16(), logger)
+                        .await
+                });
+            };
+            path.1
         };
 
         let path = path.clone();
-        let target_path: String = uri_path
+        let target_path = uri_path
             .strip_prefix(path.uri())
-            .unwrap_or(&uri_path)
-            .into();
+            .unwrap_or(&uri_path);
+
+        let host_context = HostContext::from_uri(target_path)
+            .with_logger(logger.clone())
+            .with_root_directory(
+                self.config
+                    .root_directory()
+                    .clone(),
+            );
 
         let future = async move {
-            let result = path.handle(request, Arc::from(target_path));
+            let result = path.handle(request, host_context);
             match result.await {
                 Ok(response) => Ok(response),
                 Err(error) => {
                     match error {
-                        VetisError::Host(HostError::File(FileError::NotFound)) => {
-                            log::error!("Invalid path: {}", error);
+                        VetisError::Host(HostError::Proxy(_)) => {
+                            error!(logger, "{}", error);
                             return self
-                                .serve_status_page(http::StatusCode::NOT_FOUND.as_u16())
+                                .serve_status_page(http::StatusCode::BAD_GATEWAY.as_u16(), logger)
                                 .await;
                         }
-                        VetisError::Host(HostError::Proxy(ref error)) => {
-                            log::error!("Proxy error: {}", error);
+                        VetisError::Host(HostError::Auth(_)) => {
+                            error!(logger, "{}", error);
                             return self
-                                .serve_status_page(http::StatusCode::BAD_GATEWAY.as_u16())
+                                .serve_status_page(http::StatusCode::UNAUTHORIZED.as_u16(), logger)
                                 .await;
                         }
-                        VetisError::Host(HostError::Auth(e)) => {
-                            log::error!("Auth error: {}", e);
+                        VetisError::Host(HostError::Content(inner_error)) => {
+                            error!(logger, "{}", inner_error);
+                            let status_code = match inner_error {
+                                ContentError::Forbidden => StatusCode::FORBIDDEN.as_u16(),
+                                ContentError::NotFound(_) => StatusCode::NOT_FOUND.as_u16(),
+                                ContentError::InvalidMetadata(_) => {
+                                    StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+                                }
+                                ContentError::InvalidRange(_) => {
+                                    StatusCode::RANGE_NOT_SATISFIABLE.as_u16()
+                                }
+                                ContentError::ServerError(_) => {
+                                    StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+                                }
+                            };
                             return self
-                                .serve_status_page(http::StatusCode::UNAUTHORIZED.as_u16())
+                                .serve_status_page(status_code, logger)
                                 .await;
                         }
                         _ => {}
@@ -152,36 +330,5 @@ impl vetis::host::Host for Host {
         };
 
         Box::pin(future)
-    }
-}
-
-impl Host {
-    /// Create a new host
-    ///
-    /// # Arguments
-    ///
-    /// * `host_config` - A `HostConfig` instance containing the host configuration.
-    ///
-    /// # Returns
-    ///
-    /// * `Self` - A new `Host` instance.
-    pub fn new(host_config: HostConfig) -> Self {
-        Self { config: host_config, paths: Trie::new() }
-    }
-
-    /// Add a path to the host
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - A `HostPath` instance containing the path configuration.
-    pub fn add_path<P>(&mut self, path: P)
-    where
-        P: Path + 'static,
-    {
-        self.paths.insert(
-            path.uri()
-                .to_string(),
-            Arc::new(Box::new(path)),
-        );
     }
 }

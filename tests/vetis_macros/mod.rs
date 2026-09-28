@@ -1,22 +1,23 @@
-use crate::common::default_protocol_version;
+use crate::{TestResult, common::default_protocol_version};
 use deboa::{
     cert::{CertificateExt as _, ContentEncoding},
     request::get,
 };
-use deboa_tokio::{cert::DeboaCertificate, Client};
+use deboa_tokio::{Client, cert::DeboaCertificate};
 use std::net::Ipv4Addr;
-use vetis::{host::handler_fn, Response, VetisServer as _};
-use vetis_macros::{http, security};
+use vetis::{Response, VetisServer as _};
+use vetis_macros::{http, tls};
+use vetis_tokio::host::path::handler_fn;
 
 #[tokio::test]
-async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_http_localhost() -> TestResult<()> {
     let mut server = http!(
         from_crate => vetis_tokio,
         port => 60002,
-        protos => vec![http::Version::HTTP_11],
+        protos => &[http::Version::HTTP_11],
         allow_unsafe_conn => true,
         handler => handler_fn(
-            |_req| async move { Ok(Response::builder().text("Hello, World!")) }
+            |_req, _ctx| async move { Ok(Response::builder().text("Hello, World!")) }
         )
     )
     .await?;
@@ -50,20 +51,20 @@ async fn test_http_localhost() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn test_https() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_req| async move { Ok(Response::builder().text("Hello, World!")) });
-    let root = env!("CARGO_MANIFEST_DIR");
+async fn test_https() -> TestResult<()> {
+    let handler =
+        handler_fn(|_req, _ctx| async move { Ok(Response::builder().text("Hello, World!")) });
     let mut server = http!(
         from_crate => vetis_tokio,
         hostname => "localhost",
-        protos => vec![default_protocol_version()],
+        protos => &[default_protocol_version()],
         port => 60001,
-        interface => Ipv4Addr::UNSPECIFIED.into(),
+        interface => Ipv4Addr::UNSPECIFIED,
         handler => handler,
-        security_config => security! {
-            cert => &format!("{root}/certs/server.der"),
-            key => &format!("{root}/certs/server.key.der"),
-            ca_cert => &format!("{root}*/certs/ca.der"),
+        tls => tls! {
+            cert => "certs/server.der",
+            key => "certs/server.key.der",
+            ca_cert => "certs/ca.der",
             client_auth => false
         }
     )
@@ -73,8 +74,7 @@ async fn test_https() -> Result<(), Box<dyn std::error::Error>> {
         .start()
         .await?;
 
-    let certificate =
-        DeboaCertificate::from_file(&format!("{root}/certs/ca.der"), ContentEncoding::DER).await?;
+    let certificate = DeboaCertificate::from_file("certs/ca.der", ContentEncoding::DER).await?;
 
     let client = Client::builder()
         .certificate(certificate)
