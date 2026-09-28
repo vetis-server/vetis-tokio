@@ -1,6 +1,6 @@
 [package]
 name = "vetis-tokio"
-version = "0.1.2-beta.4"
+version = "0.1.2-beta.5"
 authors = ["Rogerio Araújo <rogerio.araujo@gmail.com>"]
 edition = "2024"
 repository = "https://github.com/vetis-server/vetis-tokio"
@@ -15,16 +15,10 @@ rust-version = "1.85.0"
 [package.metadata.docs.rs]
 all-features = true
 
-[package.metadata.wix]
-upgrade-guid = "76DF79DF-E1F9-40A7-89D1-3190562C7851"
-path-guid = "FEA82F70-7E57-447F-A361-76FB5E25BA5F"
-license = false
-eula = false
-
 [features]
 default = [
   "http2",
-  "http3",
+  #"http3",
   "rust-tls"
 ]
 
