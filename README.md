@@ -18,8 +18,10 @@ vetis = { version = "0.1.0" }
 
 ## External crates
 
-- static-files
-- reverse-proxy
+- vetis-static
+- vetis-rev-proxy
+- vetis-fash
+- vetis-log
 - auth
 
 ## Usage Example
@@ -75,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build()?;
 
-    let mut localhost_host = Host::new(localhost_config);
+    let mut localhost_host = Host::new(localhost_config).await?;
 
     let root_path = HandlerPath::builder()
         .uri("/hello")
