@@ -327,10 +327,12 @@ impl ConnectionDispatcher {
         }
     }
 
+    // Initiate graceful shutdown and complete tasks
     pub async fn stop(&mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
         }
+
         while let Some(handle) = self
             .workers
             .join_next()

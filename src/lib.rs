@@ -11,6 +11,8 @@ pub mod io;
 pub mod listener;
 /// Runtime module
 pub mod rt;
+/// Service module
+pub(crate) mod service;
 /// Tests module
 #[cfg(test)]
 mod tests;

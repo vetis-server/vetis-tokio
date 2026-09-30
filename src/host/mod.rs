@@ -54,6 +54,13 @@ impl Host {
                         .cert_file()
                         .to_path_buf()
                 };
+
+                if !cert_path.exists() {
+                    return Err(VetisError::Config(ConfigError::Tls(
+                        "Certificate not found!".into(),
+                    )));
+                }
+
                 let cert = fs::read(cert_path)
                     .await
                     .map_err(|e| {
@@ -72,6 +79,11 @@ impl Host {
                         .key_file()
                         .to_path_buf()
                 };
+
+                if !key_path.exists() {
+                    return Err(VetisError::Config(ConfigError::Tls("Key not found!".into())));
+                }
+
                 let key = fs::read(&key_path)
                     .await
                     .map_err(|e| {
@@ -82,6 +94,15 @@ impl Host {
                     })?;
                 Some(Tls::from_cert_and_key(&cert, &key))
             } else {
+                if !security_config
+                    .cert_file()
+                    .exists()
+                {
+                    return Err(VetisError::Config(ConfigError::Tls(
+                        "Certificate not found!".into(),
+                    )));
+                }
+
                 let cert = fs::read(security_config.cert_file())
                     .await
                     .map_err(|e| {
@@ -90,6 +111,13 @@ impl Host {
                             e.to_string()
                         )))
                     })?;
+
+                if !security_config
+                    .key_file()
+                    .exists()
+                {
+                    return Err(VetisError::Config(ConfigError::Tls("Key not found!".into())));
+                }
 
                 let key = fs::read(security_config.key_file())
                     .await

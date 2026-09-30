@@ -19,7 +19,7 @@ impl MetricsWorker {
             .recv()
             .await
         {
-            /// TODO: Define tasks to perform
+            // TODO: Define tasks to perform
         }
 
         Ok(())
