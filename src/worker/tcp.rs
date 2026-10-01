@@ -22,7 +22,7 @@ pub(crate) struct TcpWorker {
     signal: Option<watch::Sender<bool>>,
     logger: Option<Logger<LogSender>>,
     receiver: MAsyncRx<Array<TcpStream>>,
-    connections: HashMap<SocketAddr, JoinHandle<()>>,
+    connections: HashMap<SocketAddr, JoinHandle<VetisResult<()>>>,
 }
 
 unsafe impl Send for TcpWorker {}
@@ -75,12 +75,8 @@ impl TcpWorker {
                 let handle = tokio::spawn(async move {
                     let tls_stream = tls_acceptor
                         .accept(tcp_stream)
-                        .await;
-                    if let Err(e) = tls_stream {
-                        error!(logger, "Could not accept connection: {}", e.to_string());
-                        // Could not accept, remove handle from hashbap
-                        return;
-                    }
+                        .await
+                        .map_err(|e| VetisError::Worker(e.to_string()))?;
 
                     // Allow graceful shutdown of http service, also allow kick off service,
                     // but mind of trigger oneshot to remove entry from hashmap
@@ -88,15 +84,16 @@ impl TcpWorker {
                     tokio::select! {
                         _ = shut_signal.changed() => {
                             info!(logger, "Closing connection {}...", client_addr);
+                            Ok(())
                         }
-                        result = builder.serve_connection_with_upgrades(TokioIo::new(tls_stream.unwrap()), service) => {
+                        result = builder.serve_connection_with_upgrades(TokioIo::new(tls_stream), service) => {
                             match result {
                                 Ok(_) => {
-                                    //
+                                    Ok(())
                                 }
                                 Err(e) => {
                                     error!(logger, "Could serve request: {}", e.to_string());
-                                    return;
+                                    Err(VetisError::Worker(e.to_string()))
                                 }
                             }
                         }
@@ -109,13 +106,23 @@ impl TcpWorker {
             } else {
                 let logger = self.logger.clone();
                 let handle = task::spawn(async move {
-                    let result = auto::Builder::new(TokioExecutor::new())
-                        .serve_connection_with_upgrades(TokioIo::new(tcp_stream), service)
-                        .await;
-
-                    if let Err(e) = result {
-                        error!(logger, "Could serve request: {}", e.to_string());
-                        return;
+                    let builder = auto::Builder::new(TokioExecutor::new());
+                    tokio::select! {
+                        _ = shut_signal.changed() => {
+                            info!(logger, "Closing connection {}...", client_addr);
+                            Ok(())
+                        }
+                        result = builder.serve_connection_with_upgrades(TokioIo::new(tcp_stream), service) => {
+                            match result {
+                                Ok(_) => {
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    error!(logger, "Could serve request: {}", e.to_string());
+                                    Err(VetisError::Worker(e.to_string()))
+                                }
+                            }
+                        }
                     }
                 });
 

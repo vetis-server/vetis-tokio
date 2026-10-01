@@ -27,7 +27,7 @@ pub struct TcpListener {
     signal: Option<watch::Sender<bool>>,
     inner: Option<tokio::net::TcpListener>,
     logger: Option<Logger<LogSender>>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<VetisResult<()>>>,
 }
 
 impl Hash for TcpListener {
@@ -185,9 +185,9 @@ impl vetis::listener::Listener for TcpListener {
             tokio::select! {
                 _ = shut_signal.changed() => {
                     info!(logger, "Stopping listener...");
-                    let _ = dispatcher.stop().await;
+                    dispatcher.stop().await
                 }
-                _ = dispatcher.run() => ()
+                _ = dispatcher.run() => Ok(())
             }
         });
 
@@ -219,7 +219,7 @@ struct ConnectionDispatcher {
     config: ListenerConfig,
     signal: Option<watch::Sender<bool>>,
     logger: Option<Logger<LogSender>>,
-    workers: JoinSet<()>,
+    workers: JoinSet<VetisResult<()>>,
     sender: Option<MAsyncTx<Array<TcpStream>>>,
 }
 
@@ -269,9 +269,9 @@ impl ConnectionDispatcher {
                 tokio::select! {
                     _ = shut_signal.changed() => {
                         info!(logger, "Stopping tcp worker {}...", worker.id());
-                        let _ = worker.stop().await;
+                        worker.stop().await
                     },
-                    _ = worker.run() => {}
+                    _ = worker.run() => Ok(())
                 }
             };
 
@@ -333,7 +333,7 @@ impl ConnectionDispatcher {
             let _ = signal.send(true);
         }
 
-        while let Some(handle) = self
+        while let Some(Ok(handle)) = self
             .workers
             .join_next()
             .await
