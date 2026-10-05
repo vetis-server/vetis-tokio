@@ -5,15 +5,15 @@ use crate::{
     listener::{Listener, tcp::TcpListener},
     worker::log::LogWorker,
 };
-use crossfire::mpsc;
+use crossfire::mpsc::{self};
 use http::Version;
 use log::info;
 use std::{
     sync::Arc,
-    thread::{self, JoinHandle},
+    thread::{self},
 };
 use vetis::{
-    VetisResult,
+    LogSender, VetisResult,
     errors::{ListenerError, VetisError},
     host::Host as _,
     listener::{Listener as _, ListenerConfig},
@@ -125,13 +125,11 @@ pub struct VetisBuilder {
 impl VetisBuilder {
     /// Allow set server config
     ///
-    /// You can either add a complete server configuration
-    /// here including hosts, or only workers, log and log
-    /// queue size.
+    /// You can either add a complete server configuration here including hosts,
+    /// or only workers, log and log queue size.
     ///
-    /// This method is useful to add extra config settings
-    /// to server when dealing with HandlerPath instances
-    /// which are not serializable.
+    /// This method is useful to add extra config settings to server when dealing
+    /// with HandlerPath instances which are not serializable.
     pub fn config(mut self, config: ServerConfig) -> Self {
         self.config = config;
         self
@@ -145,49 +143,6 @@ impl VetisBuilder {
     /// # Arguments
     ///
     /// * `host` - A type implementing the `Host` trait
-    ///
-    /// # Examples
-    ///
-    /// ```rust, ignore
-    /// use http::{StatusCode, Version};
-    /// use vetis::{
-    ///     server::ServerConfig,
-    ///     host::{path::Path, HostConfig},
-    /// };
-    /// use vetis_tokio::{
-    ///     host::{Host, path::{HandlerPath, handler_fn}},
-    ///     Vetis, VetisServer as _
-    /// };
-    ///
-    /// let host_config = HostConfig::builder()
-    ///     .hostname("example.com")
-    ///     .bind_addresses(vec![(
-    ///         "0.0.0.0"
-    ///             .parse()
-    ///             .unwrap(),
-    ///         8443,
-    ///     )])
-    ///     .build()?;
-    ///
-    /// let mut host = Host::new(host_config).await?;
-    ///
-    /// let mut root_path = HandlerPath::builder()
-    ///     .uri("/")
-    ///     .handler(handler_fn(|request| async move {
-    ///         let response = vetis::Response::builder()
-    ///             .status(StatusCode::OK)
-    ///             .text("Hello, World!");
-    ///         Ok(response)
-    ///     }))
-    ///     .build()?;
-    ///
-    /// host.add_path(root_path);
-    /// let server = Vetis::builder()
-    ///     .add_host(host)?
-    ///     .build();
-    ///
-    /// Ok::<(), vetis::errors::VetisError>(())
-    /// ```
     pub async fn add_host(mut self, host: Host) -> VetisResult<Self> {
         let host = Arc::new(host);
         add_host_to_listeners(
@@ -235,7 +190,7 @@ impl VetisBuilder {
 pub struct Vetis {
     config: ServerConfig,
     listeners: Vec<Listener>,
-    logger: Option<JoinHandle<()>>,
+    logger: Option<thread::JoinHandle<VetisResult<()>>>,
 }
 
 impl Vetis {
@@ -244,18 +199,6 @@ impl Vetis {
     /// # Arguments
     ///
     /// * `config` - Server configuration containing listeners and global settings
-    ///
-    /// # Examples
-    ///
-    /// ```rust, no_run
-    /// use vetis::server::ServerConfig;
-    /// use vetis_tokio::Vetis;
-    ///
-    /// let config = ServerConfig::builder().build()?;
-    /// let server = Vetis::new(config);
-    ///
-    /// Ok::<(), vetis::errors::VetisError>(())
-    /// ```
     pub async fn from_config(config: ServerConfig) -> VetisResult<Vetis> {
         let mut listeners = Vec::new();
         for host_config in config
@@ -277,6 +220,33 @@ impl Vetis {
     /// Create a new vetis instance builder
     pub fn builder() -> VetisBuilder {
         VetisBuilder { listeners: Vec::new(), config: ServerConfig::default() }
+    }
+
+    fn start_logger(&mut self) -> VetisResult<LogSender> {
+        info!(target: "vetis", "Starting logger...");
+        let (log_sender, log_receiver) = mpsc::bounded_async_blocking::<LogMessage>(
+            self.config
+                .logger_queue_size(),
+        );
+        let log_worker = LogWorker::new(log_receiver);
+        let logger_handle = thread::spawn(move || log_worker.run());
+        self.logger = Some(logger_handle);
+        Ok(log_sender)
+    }
+
+    async fn start_listeners(&mut self, log_sender: LogSender) -> VetisResult<()> {
+        info!(target: "vetis", "Starting listeners...");
+        for listener in self
+            .listeners
+            .iter_mut()
+        {
+            listener.logger(Logger::new(log_sender.clone()));
+            listener
+                .listen()
+                .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -302,35 +272,9 @@ impl vetis::VetisServer for Vetis {
 
     /// Starts the server and runs until interrupted.
     ///
-    /// This method combines `start()` and graceful shutdown handling:
-    /// 1. Starts the server with all configured hosts
-    /// 2. Listens for shutdown signals (Ctrl+C on Tokio, SIGQUIT on Smol)
-    /// 3. Stops the server gracefully
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No hosts have been added
-    /// - Server fails to start
-    /// - Server fails to stop
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use vetis::{server::ServerConfig};
-    /// use vetis_tokio::{Vetis, VetisServer as _};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let config = ServerConfig::builder().build()?;
-    ///     let mut server = Vetis::new(config);
-    ///
-    ///     // Add virtual hosts...
-    ///
-    ///     server.run().await?; // Runs until Ctrl+C
-    ///     Ok(())
-    /// }
-    /// ```
+    /// Please note signal handling should be handled by app code, not here
+    /// since it is just a runtime specific crate, for now we only print
+    /// listeners information to help on user access.
     async fn run(&mut self) -> VetisResult<()> {
         self.start().await?;
 
@@ -372,34 +316,14 @@ impl vetis::VetisServer for Vetis {
     /// This method starts the server and returns immediately, allowing
     /// you to perform additional setup or handle shutdown manually.
     ///
+    /// Listeners and workers will be started here.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - No hosts have been added
     /// - Server fails to bind to configured addresses
     /// - TLS configuration fails
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use vetis::{server::ServerConfig};
-    /// use vetis_tokio::{Vetis, VetisServer as _};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let config = ServerConfig::builder().build()?;
-    ///     let mut server = Vetis::new(config);
-    ///
-    ///     // Add hosts...
-    ///
-    ///     server.start().await?;
-    ///
-    ///     // Server is now running, do other work...
-    ///
-    ///     server.stop().await?;
-    ///     Ok(())
-    /// }
-    /// ```
     async fn start(&mut self) -> VetisResult<()> {
         if self
             .listeners
@@ -408,32 +332,10 @@ impl vetis::VetisServer for Vetis {
             return Err(VetisError::Listener(ListenerError::NoListeners));
         }
 
-        info!(target: "vetis", "Starting logger...");
-        let (log_sender, log_receiver) = mpsc::bounded_async_blocking::<LogMessage>(
-            self.config
-                .logger_queue_size(),
-        );
+        let log_sender = self.start_logger()?;
 
-        let log_worker = LogWorker::new(log_receiver);
-        let logger_handle = thread::spawn(move || {
-            let res = log_worker.run();
-            if res.is_ok() {
-                info!(target: "vetis", "Logger stopped successfully!")
-            }
-        });
-        self.logger = Some(logger_handle);
-
-        info!(target: "vetis", "Starting listeners...");
-        for listener in self
-            .listeners
-            .iter_mut()
-        {
-            let logger = Logger::new(log_sender.clone());
-            listener.logger(logger);
-            listener
-                .listen()
-                .await?;
-        }
+        self.start_listeners(log_sender)
+            .await?;
 
         Ok(())
     }
@@ -446,27 +348,9 @@ impl vetis::VetisServer for Vetis {
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No server instance is running
+    /// - No listeners available
     /// - Server fails to stop properly
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use vetis::{server::ServerConfig};
-    /// use vetis_tokio::{Vetis, VetisServer as _};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let config = ServerConfig::builder().build()?;
-    ///     let mut server = Vetis::new(config);
-    ///
-    ///     server.start().await?;
-    ///     // Server running...
-    ///     server.stop().await?;
-    ///     Ok(())
-    /// }
-    /// ```
-    async fn stop(&mut self) -> VetisResult<()> {
+    async fn stop(self) -> VetisResult<()> {
         if self
             .listeners
             .is_empty()
@@ -474,37 +358,18 @@ impl vetis::VetisServer for Vetis {
             return Err(VetisError::Stop("Vetis is not running".to_string()));
         }
 
-        for listener in &mut self.listeners {
+        for listener in self.listeners {
             listener
                 .stop()
                 .await?
         }
-
-        self.listeners
-            .clear();
-
         Ok(())
     }
 
     /// Reload the server configuration
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use vetis_tokio::{Vetis, VetisServer as _};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let config = vetis::server::ServerConfig::builder().build()?;
-    ///     let mut server = Vetis::new(config);
-    ///
-    ///     let changed_config = vetis::server::ServerConfig::builder().build()?;
-    ///     server.reload(changed_config).await;
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     async fn reload(&mut self, _new_config: ServerConfig) -> VetisResult<()> {
+        // TODO: ServerConfig should be serializable and we should receive entire
+        // configuration?
         Ok(())
     }
 }
