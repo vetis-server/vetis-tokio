@@ -94,15 +94,13 @@ impl vetis::listener::Listener for TcpListener {
         let hosts = self
             .hosts
             .pin_owned();
-        hosts.insert(
-            format!(
-                "{}:{}",
-                host.hostname()
-                    .to_string(),
-                self.config().port()
-            ),
-            host.clone(),
-        );
+        let hostname = match self.config.port() {
+            80 | 443 => host
+                .hostname()
+                .to_string(),
+            _ => format!("{}:{}", host.hostname(), self.config().port()),
+        };
+        hosts.insert(hostname, host.clone());
         Ok(())
     }
 
@@ -187,7 +185,7 @@ impl vetis::listener::Listener for TcpListener {
                     info!(logger, "Stopping listener...");
                     dispatcher.stop().await
                 }
-                _ = dispatcher.run() => Ok(())
+                res = dispatcher.run() => res
             }
         });
 
@@ -197,7 +195,7 @@ impl vetis::listener::Listener for TcpListener {
         Ok(())
     }
 
-    async fn stop(&mut self) -> VetisResult<()> {
+    async fn stop(mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
             if let Some(handle) = self.handle.take() {
@@ -271,7 +269,7 @@ impl ConnectionDispatcher {
                         info!(logger, "Stopping tcp worker {}...", worker.id());
                         worker.stop().await
                     },
-                    _ = worker.run() => Ok(())
+                    res = worker.run() => res
                 }
             };
 
@@ -328,12 +326,12 @@ impl ConnectionDispatcher {
     }
 
     // Initiate graceful shutdown and complete tasks
-    pub async fn stop(&mut self) -> VetisResult<()> {
+    pub async fn stop(mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
         }
 
-        while let Some(Ok(handle)) = self
+        while let Some(handle) = self
             .workers
             .join_next()
             .await

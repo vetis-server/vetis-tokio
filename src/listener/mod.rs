@@ -5,11 +5,8 @@ use crate::listener::Listener::Udp;
 use crate::listener::tcp::TcpListener;
 #[cfg(feature = "http3")]
 use crate::listener::udp::UdpListener;
-use std::hash::Hash;
-use std::sync::Arc;
-use vetis::LogSender;
-use vetis::log::Logger;
-use vetis::{VetisResult, listener::ListenerConfig};
+use std::{hash::Hash, sync::Arc};
+use vetis::{LogSender, VetisResult, listener::ListenerConfig, log::Logger};
 
 pub(crate) mod tcp;
 #[cfg(feature = "http3")]
@@ -157,7 +154,7 @@ impl vetis::listener::Listener for Listener {
         Ok(())
     }
 
-    async fn stop(&mut self) -> VetisResult<()> {
+    async fn stop(self) -> VetisResult<()> {
         match self {
             Listener::Tcp(tcp_listener) => {
                 tcp_listener

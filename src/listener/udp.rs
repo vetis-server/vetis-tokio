@@ -26,7 +26,7 @@ pub struct UdpListener {
     signal: Option<watch::Sender<bool>>,
     inner: Option<Endpoint>,
     logger: Option<Logger<LogSender>>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<VetisResult<()>>>,
 }
 
 impl Hash for UdpListener {
@@ -110,7 +110,13 @@ impl vetis::listener::Listener for UdpListener {
         let hosts = self
             .hosts
             .pin_owned();
-        hosts.insert(format!("{}:{}", host.hostname(), self.config().port()), host.clone());
+        let hostname = match self.config.port() {
+            443 => host
+                .hostname()
+                .to_string(),
+            _ => format!("{}:{}", host.hostname(), self.config().port()),
+        };
+        hosts.insert(hostname, host.clone());
         Ok(())
     }
 
@@ -180,9 +186,9 @@ impl vetis::listener::Listener for UdpListener {
             tokio::select! {
                 _ = shut_signal.changed() => {
                     info!(logger, "Stopping listener...");
-                    let _ = dispatcher.stop().await;
+                    dispatcher.stop().await
                 }
-                _ = dispatcher.run() => ()
+                res = dispatcher.run() => res
             }
         });
 
@@ -192,7 +198,7 @@ impl vetis::listener::Listener for UdpListener {
         Ok(())
     }
 
-    async fn stop(&mut self) -> VetisResult<()> {
+    async fn stop(mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
             if let Some(handle) = self.handle.take() {
@@ -214,7 +220,7 @@ struct ConnectionDispatcher {
     signal: Option<watch::Sender<bool>>,
     config: ListenerConfig,
     logger: Option<Logger<LogSender>>,
-    workers: JoinSet<()>,
+    workers: JoinSet<VetisResult<()>>,
     sender: Option<MAsyncTx<Array<Connection>>>,
 }
 
@@ -258,9 +264,9 @@ impl ConnectionDispatcher {
                 tokio::select! {
                     _ = shut_signal.changed() => {
                         info!(logger, "Stopping udp worker {}...", worker.id());
-                        let _ = worker.stop().await;
+                        worker.stop().await
                     },
-                    _ = worker.run() => {}
+                    res = worker.run() => res
                 }
             };
 
@@ -313,7 +319,7 @@ impl ConnectionDispatcher {
         Ok(())
     }
 
-    pub async fn stop(&mut self) -> VetisResult<()> {
+    pub async fn stop(mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
         }

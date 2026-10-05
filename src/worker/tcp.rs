@@ -1,55 +1,68 @@
 use crate::{host::Host, service::http::HttpService};
-use crossfire::{MAsyncRx, mpmc::Array};
+use crossfire::{AsyncRxTrait, MAsyncRx, mpmc::Array};
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto,
 };
-use std::{collections::HashMap, net::SocketAddr};
+use papaya::HashMap;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{
     net::TcpStream,
     sync::watch,
     task::{self, JoinHandle},
 };
 use tokio_rustls::TlsAcceptor;
-use vetis::{LogSender, VetisHosts, VetisResult, error, errors::VetisError, info, log::Logger};
-
-// TODO: Add support to manage connections (hanging ones)
+use vetis::{LogSender, VetisHosts, VetisResult, errors::VetisError, info, log::Logger};
 
 pub(crate) struct TcpWorker {
     id: usize,
     acceptor: TlsAcceptor,
     hosts: VetisHosts<Host>,
-    signal: Option<watch::Sender<bool>>,
     logger: Option<Logger<LogSender>>,
     receiver: MAsyncRx<Array<TcpStream>>,
-    connections: HashMap<SocketAddr, JoinHandle<VetisResult<()>>>,
+    connections: Arc<HashMap<SocketAddr, JoinHandle<VetisResult<()>>>>,
+    signal: Option<watch::Sender<bool>>,
 }
 
 unsafe impl Send for TcpWorker {}
 unsafe impl Sync for TcpWorker {}
 
 impl TcpWorker {
-    pub fn new(
+    pub(crate) fn new(
         id: usize,
         acceptor: TlsAcceptor,
         hosts: VetisHosts<Host>,
         logger: Option<Logger<LogSender>>,
         receiver: MAsyncRx<Array<TcpStream>>,
     ) -> Self {
-        Self { id, acceptor, hosts, signal: None, logger, receiver, connections: HashMap::new() }
+        Self {
+            id,
+            acceptor,
+            hosts,
+            logger,
+            receiver,
+            connections: HashMap::new().into(),
+            signal: None,
+        }
     }
 
-    pub fn id(&self) -> usize {
+    pub(crate) fn id(&self) -> usize {
         self.id
     }
 
-    pub async fn run(&mut self) -> VetisResult<()> {
-        let (shut_sender, shut_recv) = watch::channel(false);
+    #[allow(unused)]
+    pub(crate) fn total_connections(&self) -> usize {
+        self.connections
+            .len()
+    }
+
+    pub(crate) async fn run(&mut self) -> VetisResult<()> {
         let tls_acceptor = self
             .acceptor
             .clone();
-        self.signal = Some(shut_sender);
 
+        let (shut_send, _) = watch::channel(false);
+        self.signal = Some(shut_send.clone());
         info!(&self.logger, "TCP worker {} started!", self.id);
         while let Ok(tcp_stream) = self
             .receiver
@@ -66,90 +79,71 @@ impl TcpWorker {
                 .await
                 .map_err(|e| VetisError::Worker(e.to_string()))?;
 
-            let mut shut_signal = shut_recv.clone();
             let service = HttpService::new(self.hosts.clone(), client_addr, self.logger.clone());
             let is_tls = buf.starts_with(&[0x16, 0x03]);
-            if is_tls {
+            let handle = if is_tls {
                 let tls_acceptor = tls_acceptor.clone();
                 let logger = self.logger.clone();
-                let handle = tokio::spawn(async move {
+                let conns = self
+                    .connections
+                    .clone();
+                let mut shut_signal = shut_send.subscribe();
+                tokio::spawn(async move {
                     let tls_stream = tls_acceptor
                         .accept(tcp_stream)
                         .await
                         .map_err(|e| VetisError::Worker(e.to_string()))?;
 
-                    // Allow graceful shutdown of http service, also allow kick off service,
-                    // but mind of trigger oneshot to remove entry from hashmap
                     let builder = auto::Builder::new(TokioExecutor::new());
                     tokio::select! {
                         _ = shut_signal.changed() => {
-                            info!(logger, "Closing connection {}...", client_addr);
+                            info!(logger, "Closing connection {}...", &client_addr);
                             Ok(())
                         }
-                        result = builder.serve_connection_with_upgrades(TokioIo::new(tls_stream), service) => {
-                            match result {
-                                Ok(_) => {
-                                    Ok(())
-                                }
-                                Err(e) => {
-                                    error!(logger, "Could serve request: {}", e.to_string());
-                                    Err(VetisError::Worker(e.to_string()))
-                                }
-                            }
+                        res = builder.serve_connection_with_upgrades(TokioIo::new(tls_stream), service) => {
+                            conns.pin().remove(&client_addr);
+                            res.map_err(|e| VetisError::Worker(e.to_string()))
                         }
                     }
-                });
-
-                // Save handle to be able to kick connnections
-                self.connections
-                    .insert(client_addr, handle);
+                })
             } else {
                 let logger = self.logger.clone();
-                let handle = task::spawn(async move {
+                let conns = self
+                    .connections
+                    .clone();
+                let mut shut_signal = shut_send.subscribe();
+                task::spawn(async move {
                     let builder = auto::Builder::new(TokioExecutor::new());
                     tokio::select! {
                         _ = shut_signal.changed() => {
                             info!(logger, "Closing connection {}...", client_addr);
                             Ok(())
                         }
-                        result = builder.serve_connection_with_upgrades(TokioIo::new(tcp_stream), service) => {
-                            match result {
-                                Ok(_) => {
-                                    Ok(())
-                                }
-                                Err(e) => {
-                                    error!(logger, "Could serve request: {}", e.to_string());
-                                    Err(VetisError::Worker(e.to_string()))
-                                }
-                            }
+                        res = builder.serve_connection_with_upgrades(TokioIo::new(tcp_stream), service) => {
+                            conns.pin().remove(&client_addr);
+                            res.map_err(|e| VetisError::Worker(e.to_string()))
                         }
                     }
-                });
-
-                // Save handle to be able to kick connnections
-                self.connections
-                    .insert(client_addr, handle);
-            }
+                })
+            };
+            self.connections
+                .pin()
+                .insert(client_addr, handle);
         }
         Ok(())
     }
 
-    pub async fn stop(mut self) -> VetisResult<()> {
+    pub(crate) async fn stop(mut self) -> VetisResult<()> {
         if let Some(signal) = self.signal.take() {
             let _ = signal.send(true);
         }
-        for entry in self
+
+        for handle in self
             .connections
-            .into_iter()
+            .pin()
+            .values()
         {
-            match entry.1.await {
-                Ok(_) => {
-                    info!(&self.logger, "HTTP client connection dropped!");
-                }
-                Err(e) => {
-                    error!(self.logger, "Internal error: {:?}", e);
-                }
-            }
+            handle.abort();
         }
 
         Ok(())
