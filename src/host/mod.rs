@@ -2,6 +2,7 @@
 //!
 //! This module provides functionality for creating and managing hosts,
 //! including path routing and request handling.
+use crate::io::ReaderStream;
 use futures_util::TryStreamExt;
 use http::StatusCode;
 use http_body_util::StreamBody;
@@ -17,8 +18,6 @@ use vetis::{
     security::Tls,
 };
 
-use crate::io::ReaderStream;
-
 pub mod path;
 
 /// Host type
@@ -30,6 +29,13 @@ pub struct Host {
 
 unsafe impl Send for Host {}
 unsafe impl Sync for Host {}
+
+// TODO: Add a method on host to set an Arc with a hashmap of links
+// so a path can pick a link and set himself as a sender to a worker of
+// interest.
+
+// TODO: A host hold a list of services and workers he can provide.
+// A path is responsive to subscribe to them
 
 impl Host {
     /// Create a new host
@@ -240,7 +246,7 @@ impl vetis::host::Host for Host {
                                 let body = StreamBody::new(content);
                                 return Ok(Response::builder()
                                     .status(status_code)
-                                    .body(HttpBody::from_generic_stream(body)));
+                                    .body(HttpBody::stream(body)));
                             }
                         } else {
                             error!(logger, target: self.config.hostname(), "Could not find status page!");
@@ -263,8 +269,8 @@ impl vetis::host::Host for Host {
     ///
     /// # Returns
     ///
-    /// * `Pin<Box<dyn Future<Output = Result<Response, VetisError>> + Send>>` - A pinned box
-    ///    containing the future that will resolve to a `Result<Response, VetisError>`.
+    /// * `VetisFutureResult<'a, Response>` - A pinned box containing the future
+    ///   that will resolve to a `Result<Response, VetisError>`.
     fn route<'a>(
         &'a self,
         request: Request,
@@ -275,7 +281,7 @@ impl vetis::host::Host for Host {
             .path()
             .into();
 
-        if uri_path.starts_with("..") {
+        if uri_path.contains("..") {
             return Box::pin(async move {
                 debug!(logger, "Invalid access!");
                 self.serve_status_page(http::StatusCode::FORBIDDEN.as_u16(), logger)
@@ -317,21 +323,20 @@ impl vetis::host::Host for Host {
             match result.await {
                 Ok(response) => Ok(response),
                 Err(error) => {
+                    error!(logger, target: "vetis", "Error: {}", error.to_string());
+                    error!(logger, target: self.config.hostname(), "Error: {}", error.to_string());
                     match error {
                         VetisError::Host(HostError::Proxy(_)) => {
-                            error!(logger, "{}", error);
                             return self
                                 .serve_status_page(http::StatusCode::BAD_GATEWAY.as_u16(), logger)
                                 .await;
                         }
                         VetisError::Host(HostError::Auth(_)) => {
-                            error!(logger, "{}", error);
                             return self
                                 .serve_status_page(http::StatusCode::UNAUTHORIZED.as_u16(), logger)
                                 .await;
                         }
                         VetisError::Host(HostError::Content(inner_error)) => {
-                            error!(logger, "{}", inner_error);
                             let status_code = match inner_error {
                                 ContentError::Forbidden => StatusCode::FORBIDDEN.as_u16(),
                                 ContentError::NotFound(_) => StatusCode::NOT_FOUND.as_u16(),

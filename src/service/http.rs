@@ -122,7 +122,7 @@ where
 
                 // Make a vetis request and route to appropriate path
                 let (parts, body) = req.into_parts();
-                let request = Request::from_parts(parts, HttpBody::from_incoming(body));
+                let request = Request::from_parts(parts, HttpBody::incoming(body));
                 let vetis_response = host
                     .route(request, logger.clone())
                     .await?;
@@ -152,10 +152,8 @@ where
                     }
                 }
 
-                if let Some(query) = uri.query() {
-                    info!(
-                        logger,
-                        target: &hostname,
+                let message = if let Some(query) = uri.query() {
+                    format!(
                         "{} {} {}?{} {:?} {}",
                         client_addr,
                         method,
@@ -163,19 +161,20 @@ where
                         query,
                         version,
                         response.status()
-                    );
+                    )
                 } else {
-                    info!(
-                        logger,
-                        target: &hostname,
+                    format!(
                         "{} {} {} {:?} {}",
                         client_addr,
                         method,
                         uri,
                         version,
                         response.status()
-                    );
-                }
+                    )
+                };
+
+                info!(logger, target: "vetis", "{}", message);
+                info!(logger, target: &hostname, "{}", message);
 
                 Ok::<http::Response<HttpBody>, VetisError>(response)
             } else {

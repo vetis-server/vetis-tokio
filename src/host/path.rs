@@ -1,7 +1,6 @@
 //! Path module
-use std::sync::Arc;
 use vetis::{
-    Request, Response, VetisFutureResult, VetisResult,
+    Request, Response, Str, VetisFutureResult, VetisResult,
     errors::{HandlerError, HostError, VetisError},
     host::{HostContext, path::Path},
 };
@@ -63,7 +62,7 @@ where
 
 /// Builder for handler path
 pub struct HandlerPathBuilder {
-    uri: Arc<str>,
+    uri: Str,
     handler: Option<HandlerFn>,
 }
 
@@ -78,7 +77,7 @@ impl HandlerPathBuilder {
     ///
     /// * `Self` - The builder
     pub fn uri(mut self, uri: &str) -> Self {
-        self.uri = Arc::from(uri.to_string());
+        self.uri = Str::from(uri.to_string());
         self
     }
 
@@ -123,7 +122,7 @@ impl HandlerPathBuilder {
 
 /// Handler path
 pub struct HandlerPath {
-    uri: Arc<str>,
+    uri: Str,
     handler: HandlerFn,
 }
 

@@ -2,18 +2,18 @@ use log::{debug, error, info, trace};
 use std::sync::Arc;
 use vetis::{LogReceiver, VetisResult};
 
-pub struct LogWorker {
+pub(crate) struct LogWorker {
     receiver: Arc<LogReceiver>,
 }
 
 unsafe impl Send for LogWorker {}
 
 impl LogWorker {
-    pub fn new(receiver: LogReceiver) -> LogWorker {
+    pub(crate) fn new(receiver: LogReceiver) -> LogWorker {
         LogWorker { receiver: receiver.into() }
     }
 
-    pub fn run(&self) -> VetisResult<()> {
+    pub(crate) fn run(&self) -> VetisResult<()> {
         info!(target: "vetis", "Logger started!");
         while let Ok(message) = self.receiver.recv() {
             match message.level() {
@@ -24,7 +24,7 @@ impl LogWorker {
                 &_ => unreachable!(),
             }
         }
-        info!(target: "vetis", "Stopping logger...");
+        info!(target: "vetis", "Logger stopped successfully!");
 
         Ok(())
     }

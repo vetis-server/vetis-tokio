@@ -12,10 +12,10 @@ use vetis::{
     security::Alpn,
 };
 
-pub struct TlsFactory {}
+pub(crate) struct TlsFactory {}
 
 impl TlsFactory {
-    pub async fn create_tls_config(
+    pub(crate) async fn create_tls_config(
         hosts: VetisHosts<Host>,
     ) -> Result<Arc<ServerConfig>, VetisError> {
         let hosts = hosts.clone();
