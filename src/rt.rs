@@ -365,11 +365,4 @@ impl vetis::VetisServer for Vetis {
         }
         Ok(())
     }
-
-    /// Reload the server configuration
-    async fn reload(&mut self, _new_config: ServerConfig) -> VetisResult<()> {
-        // TODO: ServerConfig should be serializable and we should receive entire
-        // configuration?
-        Ok(())
-    }
 }

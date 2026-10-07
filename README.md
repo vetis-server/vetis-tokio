@@ -12,7 +12,7 @@ vetis = { version = "0.1.0" }
 
 ## Crate features
 
-- http2 (default)
+- http2
 - http3
 - rust-tls (default)
 
@@ -32,39 +32,34 @@ Here's how simple it is to create a web server with VeTiS:
 use http::Version;
 use hyper::StatusCode;
 use vetis::{
-    listener::ListenerConfig,
-    security::SecurityConfig,
+    security::TlsConfig,
     server::{ServerConfig},
     host::{handler_fn, HostConfig},
 };
 use vetis_macros::status_pages;
 use vetis_tokio::{
     host::{path::HandlerPath, Host},
-    listener::build_listeners,
     Vetis, VetisServer as _
 };
 
-pub(crate) const CA_CERT: &[u8] = include_bytes!("../certs/ca.der");
-pub(crate) const SERVER_CERT: &[u8] = include_bytes!("../certs/server.der");
-pub(crate) const SERVER_KEY: &[u8] = include_bytes!("../certs/server.key.der");
+pub(crate) const CA_CERT: &str = "certs/ca.der";
+pub(crate) const SERVER_CERT: &str = "certs/server.der";
+pub(crate) const SERVER_KEY: &str = "certs/server.key.der";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let https = ListenerConfig::builder()
-        .port(8443)
-        .protos(vec![Version::HTTP_11])
-        .interface("0.0.0.0".parse().unwrap())
-        .build()?;
-
-    let security_config = SecurityConfig::builder()
-        .ca_cert_from_bytes(CA_CERT.to_vec())
-        .cert_from_bytes(SERVER_CERT.to_vec())
-        .key_from_bytes(SERVER_KEY.to_vec())
+    env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
+d on deboa-tests for testing purposes, it turned into a complete http server project, the goal is make it very flexible, while keeping it small and fast.
+    let security_config = TlsConfig::builder()
+        .ca_file(CA_CERT)
+        .cert_file(SERVER_CERT)
+        .key_file(SERVER_KEY)
         .build()?;
 
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
-        .security(security_config)
+        .tls(security_config)
+        .root_directory("/home/rogerio/Downloads")
         .bind_addresses(vec![(
             "0.0.0.0"
                 .parse()
@@ -72,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             8443,
         )])
         .status_pages(status_pages! {
-            404 @ "404.html".to_string(),
-            500 @ "500.html".to_string(),
+            404 @ "404.html",
+            500 @ "500.html",
         })
         .build()?;
 
@@ -104,7 +99,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     localhost_host.add_path(health_path);
 
     let mut server = Vetis::builder()
-        .add_listeners(build_listeners(https))?
         .add_host(localhost_host)?
         .build();
 
