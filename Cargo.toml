@@ -90,7 +90,7 @@ vetis = { version = "0.1.7-beta.5", default-features = false }
 [dev-dependencies]
 caramelo = "0.1.5"
 deboa = { version = "0.1.5-beta.3" }
-deboa-tokio = { version = "0.1.4-beta.3", default-features = false, features = [
+deboa-tokio = { version = "0.1.4-beta.4", default-features = false, features = [
   "http2",
   #"http3",
   "rust-tls",

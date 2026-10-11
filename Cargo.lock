@@ -384,9 +384,9 @@ dependencies = [
 
 [[package]]
 name = "deboa-tokio"
-version = "0.1.4-beta.3"
+version = "0.1.4-beta.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cce0bc3562ecc6e5002c9aae838126d3ddb4c167a616dd7fac7a6fb8b4dcfb6d"
+checksum = "73110b915234e80d44963f89c98e7bec6b4b2b9bb17006e00c774cb152a4bff2"
 dependencies = [
  "async-executor",
  "async-lock",
