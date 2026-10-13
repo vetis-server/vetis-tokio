@@ -15,7 +15,6 @@ pub(crate) const IP6_SERVER_CERT: &str = "certs/ip6-server.der";
 pub(crate) const IP6_SERVER_KEY: &str = "certs/ip6-server.key.der";
 
 pub(crate) const fn default_protocol_version() -> Version {
-    return Version::HTTP_11;
     #[cfg(feature = "http2")]
     return Version::HTTP_2;
     #[cfg(feature = "http3")]

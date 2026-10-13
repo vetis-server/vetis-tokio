@@ -9,13 +9,14 @@ use crate::{
 };
 use deboa::cert::{CertificateExt, ContentEncoding};
 use deboa_tokio::{Client, cert::DeboaCertificate};
-use http::StatusCode;
+use http::{StatusCode, Version};
 use vetis::{VetisServer, VetisTestResult, host::HostConfig, security::TlsConfig};
 
 #[tokio::test]
 async fn test_no_https_error() -> VetisTestResult<()> {
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
+        .protos(&[Version::HTTP_11])
         .bind_addresses(&[(
             "0.0.0.0"
                 .parse()
@@ -73,6 +74,7 @@ async fn test_http() -> VetisTestResult<()> {
     // TODO: Add a path to config, even HandlerPath, build host from config
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
+        .protos(&[Version::HTTP_11])
         .bind_addresses(&[(
             "0.0.0.0"
                 .parse()
@@ -93,13 +95,9 @@ async fn test_http() -> VetisTestResult<()> {
         .start()
         .await?;
 
-    let client = Client::builder()
-        .protos(vec![default_protocol_version()])
-        .prior_knowledge(true)
-        .build();
+    let client = Client::default();
 
     let response = deboa::request::get("http://localhost:55002/hello")?
-        .version(default_protocol_version())
         .send_with(&client)
         .await?;
 
@@ -135,6 +133,7 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
     let ip4_localhost_config = HostConfig::builder()
         .hostname("localhost")
         .tls(ip4_security_config)
+        .protos(&[default_protocol_version()])
         .bind_addresses(&[(
             "0.0.0.0"
                 .parse()
@@ -146,6 +145,7 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
     let ip6_localhost_config = HostConfig::builder()
         .hostname(host)
         .tls(ip6_security_config)
+        .protos(&[default_protocol_version()])
         .bind_addresses(&[(
             "::".parse()
                 .unwrap(),
@@ -192,10 +192,13 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
 
     let cert = tokio::fs::read(CA_CERT.to_string()).await?;
     let client = Client::builder()
+        .protos(vec![default_protocol_version()])
         .certificate(DeboaCertificate::from_slice(&cert, ContentEncoding::DER))
+        .prior_knowledge(true)
         .build();
 
     let request = deboa::request::get("https://localhost:65000/hello")?
+        .version(default_protocol_version())
         .send_with(&client)
         .await?;
 
@@ -210,6 +213,8 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
     let cert = tokio::fs::read(CA_CERT.to_string()).await?;
     let client = Client::builder()
         .certificate(DeboaCertificate::from_slice(&cert, ContentEncoding::DER))
+        .protos(vec![default_protocol_version()])
+        .prior_knowledge(true)
         .bind_addr(
             "::1"
                 .parse()
@@ -218,6 +223,7 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
         .build();
 
     let request = deboa::request::get(format!("https://{}:65001/hello", host))?
+        .version(default_protocol_version())
         .send_with(&client)
         .await?;
 

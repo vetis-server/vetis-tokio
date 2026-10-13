@@ -62,10 +62,13 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     let cert = tokio::fs::read(CA_CERT).await?;
     let client = Client::builder()
+        .protos(vec![default_protocol_version()])
         .certificate(DeboaCertificate::from_slice(&cert, ContentEncoding::DER))
+        .prior_knowledge(true)
         .build();
 
     let request = request::get(format!("https://localhost:{}{}", port, "/hello"))?
+        .version(default_protocol_version())
         .send_with(&client)
         .await?;
 
