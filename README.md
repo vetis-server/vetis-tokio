@@ -28,17 +28,17 @@ vetis = { version = "0.1.0" }
 
 Here's how simple it is to create a web server with VeTiS:
 
-```rust, no_run
+```rust,ignore
 use http::Version;
 use hyper::StatusCode;
 use vetis::{
     security::TlsConfig,
     server::{ServerConfig},
-    host::{handler_fn, HostConfig},
+    host::{HostConfig},
 };
 use vetis_macros::status_pages;
 use vetis_tokio::{
-    host::{path::HandlerPath, Host},
+    host::{path::{handler_fn, HandlerPath}, Host},
     Vetis, VetisServer as _
 };
 
@@ -49,7 +49,7 @@ pub(crate) const SERVER_KEY: &str = "certs/server.key.der";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
-d on deboa-tests for testing purposes, it turned into a complete http server project, the goal is make it very flexible, while keeping it small and fast.
+
     let security_config = TlsConfig::builder()
         .ca_file(CA_CERT)
         .cert_file(SERVER_CERT)
@@ -60,7 +60,7 @@ d on deboa-tests for testing purposes, it turned into a complete http server pro
         .hostname("localhost")
         .tls(security_config)
         .root_directory("/home/rogerio/Downloads")
-        .bind_addresses(vec![(
+        .bind_addresses(&[(
             "0.0.0.0"
                 .parse()
                 .unwrap(),
@@ -76,7 +76,7 @@ d on deboa-tests for testing purposes, it turned into a complete http server pro
 
     let root_path = HandlerPath::builder()
         .uri("/hello")
-        .handler(handler_fn(|_request| async move {
+        .handler(handler_fn(|_request, _context| async move {
             let response = vetis::Response::builder()
                 .status(StatusCode::OK)
                 .text("Hello from localhost");
@@ -88,7 +88,7 @@ d on deboa-tests for testing purposes, it turned into a complete http server pro
 
     let health_path = HandlerPath::builder()
         .uri("/health")
-        .handler(handler_fn(|_request| async move {
+        .handler(handler_fn(|_request, _context| async move {
             let response = vetis::Response::builder()
                 .status(StatusCode::OK)
                 .text("Health check");
@@ -99,7 +99,7 @@ d on deboa-tests for testing purposes, it turned into a complete http server pro
     localhost_host.add_path(health_path);
 
     let mut server = Vetis::builder()
-        .add_host(localhost_host)?
+        .add_host(localhost_host).await?
         .build();
 
     server.run().await?;

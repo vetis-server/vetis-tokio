@@ -14,10 +14,10 @@ use vetis::{
 /// # Examples
 ///
 /// ```rust,no_run
-/// use vetis::HandlerFn;
-/// use vetis::{Request, Response, errors::VetisError};
+/// use vetis::{Request, Response, errors::VetisError, host::HostContext};
+/// use vetis_tokio::host::path::HandlerFn;
 ///
-/// let handler: HandlerFn = Box::new(|request: Request| {
+/// let handler: HandlerFn = Box::new(|request: Request, context: HostContext| {
 ///     Box::pin(async move {
 ///         // Process request...
 ///         Ok(Response::builder()
@@ -42,8 +42,9 @@ pub type HandlerFn =
 ///
 /// ```rust,no_run
 /// use vetis::{
-///     host::{handler_fn, HostConfig},
+///     host::{HostConfig},
 /// };
+/// use vetis_tokio::host::path::handler_fn;
 ///
 /// let config = HostConfig::builder()
 ///     .hostname("example.com")
