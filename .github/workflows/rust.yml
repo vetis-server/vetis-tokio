@@ -120,7 +120,7 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
           args:
             "--package vetis-tokio --locked --release --features \"${{ matrix.protocols }} rust-tls deboa-tokio/${{ matrix.protocols }} deboa-tokio/rust-tls deboa-tokio/default-rustls-provider deboa-tokio/default-rustls-verifier\" --no-default-features"
-          strip: true
+          strip: false
           cross-version: ${{ matrix.platform.cross-version || 'v0.2.5' }}
 
       - name: Run tests for ${{ matrix.platform.target }} with vetis-tokio and ${{ matrix.protocols }} and rust-tls features
