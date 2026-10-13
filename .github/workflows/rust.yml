@@ -75,7 +75,7 @@ jobs:
             target: s390x-unknown-linux-gnu
             skip-tests: true
           - os-name: Windows-aarch64
-            runs-on: windows-2025-arm64
+            runs-on: windows-11-arm
             target: aarch64-pc-windows-msvc
             skip-tests: true
           - os-name: Windows-i686
