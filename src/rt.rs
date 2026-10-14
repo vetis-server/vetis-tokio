@@ -86,7 +86,7 @@ async fn add_host_to_listeners(
         #[cfg(feature = "http3")]
         if has_udp_listener {
             let mut listener = Listener::Udp(UdpListener::new(listener_config.clone()));
-            // UDP is asking for reserve port and not port has been assigned to TCP
+            // UDP is asking for reserve port and not for port which has been assigned to TCP
             if port == 0
                 && listener
                     .config()
@@ -96,7 +96,8 @@ async fn add_host_to_listeners(
                 listener
                     .reserve_port()
                     .await?;
-            } else {
+            // Got an port assigned to TCP listener, use same on UDP listener
+            } else if port > 0 {
                 listener.reassign_port(port);
             }
 
