@@ -192,8 +192,8 @@ async fn test_multiple_interfaces() -> VetisTestResult<()> {
 
     let cert = tokio::fs::read(CA_CERT.to_string()).await?;
     let client = Client::builder()
-        .protos(vec![default_protocol_version()])
         .certificate(DeboaCertificate::from_slice(&cert, ContentEncoding::DER))
+        .protos(vec![default_protocol_version()])
         .prior_knowledge(true)
         .build();
 
