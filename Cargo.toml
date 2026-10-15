@@ -1,6 +1,6 @@
 [package]
 name = "vetis-tokio"
-version = "0.1.2-beta.7"
+version = "0.1.2-beta.8"
 authors = ["Rogerio Araújo <rogerio.araujo@gmail.com>"]
 edition = "2024"
 repository = "https://github.com/vetis-server/vetis-tokio"
@@ -20,7 +20,7 @@ all-features = true
 
 [features]
 default = [
-  "http2",
+  #"http2",
   "http3",
   "rust-tls"
 ]
@@ -83,7 +83,7 @@ vetis = { version = "0.1.7-beta.5", default-features = false }
 [dev-dependencies]
 caramelo = "0.1.5"
 deboa = { version = "0.1.5-beta.5" }
-deboa-tokio = { version = "0.1.4-beta.5", default-features = false, features = [
+deboa-tokio = { version = "0.1.4-beta.6", default-features = false, features = [
   "http2",
   "http3",
   "rust-tls",
