@@ -91,24 +91,22 @@ impl vetis::listener::Listener for TcpListener {
 
     fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
         // Add a host
-        let hosts = self
-            .hosts
-            .pin_owned();
         let hostname = match self.config.port() {
             80 | 443 => host
                 .hostname()
                 .to_string(),
             _ => format!("{}:{}", host.hostname(), self.config().port()),
         };
-        hosts.insert(hostname, host.clone());
+        self.hosts
+            .pin()
+            .insert(hostname, host.clone());
         Ok(())
     }
 
     fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
-        let hosts = self
-            .hosts
-            .pin_owned();
-        hosts.remove(hostname);
+        self.hosts
+            .pin()
+            .remove(hostname);
         Ok(())
     }
 
