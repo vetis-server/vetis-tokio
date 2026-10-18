@@ -76,7 +76,7 @@ impl Host {
                         )))
                     })?;
                 let key_path = if security_config
-                    .cert_file()
+                    .key_file()
                     .is_relative()
                 {
                     PathBuf::from_iter([root_dir, security_config.key_file()])
