@@ -38,10 +38,11 @@ where
         let read_buf = &mut ReadBuf::new(&mut buf);
         match pin!(&mut self.reader).poll_read(cx, read_buf) {
             Poll::Ready(Ok(_)) => {
-                if read_buf.remaining() == 0 || read_buf.remaining() < BUF_SIZE {
-                    return Poll::Ready(Some(Ok(Bytes::copy_from_slice(&buf))));
+                let filled = read_buf.filled();
+                if filled.is_empty() {
+                    return Poll::Ready(None);
                 }
-                Poll::Ready(None::<Self::Item>)
+                Poll::Ready(Some(Ok(Bytes::copy_from_slice(filled))))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Some(Err(Error::new(ErrorKind::Other, e)))),
             Poll::Pending => Poll::Pending,

@@ -788,8 +788,6 @@ dependencies = [
 [[package]]
 name = "hyper-body-utils"
 version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc562691bacb4a4dbb2255b7321d7b69a635e21403a0e8d6351ddca0790b6926"
 dependencies = [
  "async-fn-stream",
  "bytes",
@@ -2075,8 +2073,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vetis"
 version = "0.1.7-beta.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d0407c3e569e88a08a5136d54a5f7934d12b5034aab95395476a1d036856214"
 dependencies = [
  "arcstr",
  "crossfire",

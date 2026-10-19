@@ -54,7 +54,7 @@ impl PartialEq for TcpListener {
 
     fn ne(&self, other: &Self) -> bool {
         self.config.port() != other.config.port()
-            && self
+            || self
                 .config
                 .interface()
                 != other
