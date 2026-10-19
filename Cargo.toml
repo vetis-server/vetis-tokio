@@ -96,6 +96,6 @@ tokio = { version = "1.52.3", default-features = false, features = [
 ] }
 vetis-macros = { version = "0.1.3-beta.6" }
 
-[patch.crates-io]
-hyper-body-utils = { path = "../hyper-body-utils" }
-vetis = { path = "../vetis/vetis" }
+#[patch.crates-io]
+#hyper-body-utils = { path = "../hyper-body-utils" }
+#vetis = { path = "../vetis/vetis" }
