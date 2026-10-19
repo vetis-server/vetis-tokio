@@ -21,7 +21,7 @@ all-features = true
 [features]
 default = [
   #"http2",
-  "http3",
+  #"http3",
   "rust-tls"
 ]
 
@@ -95,3 +95,7 @@ tokio = { version = "1.52.3", default-features = false, features = [
   "rt-multi-thread",
 ] }
 vetis-macros = { version = "0.1.3-beta.6" }
+
+[patch.crates-io]
+hyper-body-utils = { path = "../hyper-body-utils" }
+vetis = { path = "../vetis/vetis" }

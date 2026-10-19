@@ -4,12 +4,17 @@ use crate::{
         path::{HandlerPath, handler_fn},
     },
     tests::{
-        CA_CERT, IP6_SERVER_CERT, IP6_SERVER_KEY, SERVER_CERT, SERVER_KEY, default_protocol_version,
+        CA_CERT, IP6_SERVER_CERT, IP6_SERVER_KEY, SERVER_CERT, SERVER_KEY, create_hello_handler,
+        create_host, default_protocol_version,
     },
 };
-use deboa::cert::{CertificateExt, ContentEncoding};
+use deboa::{
+    cert::{CertificateExt, ContentEncoding},
+    request,
+};
 use deboa_tokio::{Client, cert::DeboaCertificate};
 use http::{StatusCode, Version};
+use rand::random_range;
 use vetis::{VetisServer, VetisTestResult, host::HostConfig, security::TlsConfig};
 
 #[tokio::test]
@@ -74,6 +79,7 @@ async fn test_http() -> VetisTestResult<()> {
     // TODO: Add a path to config, even HandlerPath, build host from config
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
+        .header("x-vetis-test", "default")
         .protos(&[Version::HTTP_11])
         .bind_addresses(&[(
             "0.0.0.0"
@@ -102,7 +108,87 @@ async fn test_http() -> VetisTestResult<()> {
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-vetis-test"], "default");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_redirects_to_tls_when_hsts_is_enabled() -> VetisTestResult<()> {
+    let port = random_range(9000..=20000);
+    let tls = TlsConfig::builder()
+        .ca_file(CA_CERT)
+        .cert_file(SERVER_CERT)
+        .key_file(SERVER_KEY)
+        .build()?;
+    let config = HostConfig::builder()
+        .hostname("localhost")
+        .tls(tls)
+        .allow_unsafe_connections(true)
+        .enable_hsts(true)
+        .protos(&[Version::HTTP_11])
+        .bind_addresses(&[(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            port,
+        )])
+        .build()?;
+    let mut host = Host::new(config).await?;
+    host.add_path(
+        HandlerPath::builder()
+            .uri("/hello")
+            .handler(handler_fn(|_request, _ctx| async move {
+                Ok(vetis::Response::builder()
+                    .status(StatusCode::OK)
+                    .text("Hello from ipv4"))
+            }))
+            .build()?,
+    );
+    let mut server = crate::Vetis::builder()
+        .add_host(host)
+        .await?
+        .build();
+
+    server
+        .start()
+        .await?;
+
+    let response = request::get(format!("http://localhost:{port}/hello"))?
+        .send_with(&Client::default())
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(response.headers()["location"], format!("http://localhost:{port}/hello"));
+    server
+        .stop()
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unknown_host() -> VetisTestResult<()> {
+    let port = random_range(9000..=20000);
+    let host =
+        create_host(create_hello_handler(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
+            .await?;
+    let mut server = crate::Vetis::builder()
+        .add_host(host)
+        .await?
+        .build();
+
+    server
+        .start()
+        .await?;
+
+    let response = request::get(format!("http://127.0.0.1:{port}/hello"))?
+        .send_with(&Client::default())
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    server
+        .stop()
+        .await?;
     Ok(())
 }
 

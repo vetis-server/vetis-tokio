@@ -77,7 +77,7 @@ async fn create_test_hosts_no_security() -> VetisTestResult<VetisHosts<Host>> {
 async fn create_test_hosts_invalid_key() -> VetisTestResult<VetisHosts<Host>> {
     let security_config = TlsConfig::builder()
         .cert_file(SERVER_CERT)
-        .key_file(SERVER_KEY) // Invalid key
+        .key_file(SERVER_CERT)
         .build()
         .expect("Failed to create security config");
 
@@ -107,4 +107,38 @@ async fn create_test_hosts_invalid_key() -> VetisTestResult<VetisHosts<Host>> {
         .pin()
         .insert("localhost".into(), host.into());
     Ok(VetisHosts::new(hosts.into()))
+}
+
+#[tokio::test]
+async fn test_tls_config_with_tls_hosts() -> VetisTestResult<()> {
+    let hosts = create_test_hosts().await?;
+    let config = crate::tls::TlsFactory::create_tls_config(hosts).await?;
+
+    assert_eq!(config.max_early_data_size, u32::MAX);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tls_config_without_tls_hosts() -> VetisTestResult<()> {
+    let hosts = create_test_hosts_no_security().await?;
+    let config = crate::tls::TlsFactory::create_tls_config(hosts).await?;
+
+    assert!(
+        config
+            .alpn_protocols
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tls_config_rejects_invalid_private_key() -> VetisTestResult<()> {
+    let hosts = create_test_hosts_invalid_key().await?;
+
+    assert!(
+        crate::tls::TlsFactory::create_tls_config(hosts)
+            .await
+            .is_err()
+    );
+    Ok(())
 }
