@@ -4,14 +4,12 @@ RUN apk update && \
     apk upgrade --no-cache && \
     apk add --no-cache lld mold musl musl-dev libc-dev cmake clang-static llvm-static openssl file \
         libressl-dev git make build-base bash curl wget zip gnupg coreutils gcc g++ zstd pkgconfig \
-        binutils ca-certificates upx python3 python3-dev ruby-full php83-fpm
+    binutils ca-certificates upx
 
 WORKDIR /docker
 COPY . ./
 RUN cd /docker/vetis && \
-    RUSTFLAGS="-L native=/usr/lib/python3.12/config-3.12-x86_64-linux-musl" \
-    cargo build --release --features="tokio-rt http1 tokio-rust-tls static-files reverse-proxy auth \
-    __interface_wsgi __interface_fcgi __interface_rack" \
+    cargo build --release --features="http2 http3 rust-tls" \
     --no-default-features --target=x86_64-unknown-linux-musl
 
 
@@ -47,7 +45,6 @@ COPY --from=files --chmod=444 \
 COPY --from=files --chmod=444 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=files --chmod=444 /usr/share/zoneinfo /usr/share/zoneinfo
 
-COPY --from=build /usr/lib/python3.12/config-3.12-x86_64-linux-musl /usr/lib/python3.12/config-3.12-x86_64-linux-musl
 COPY --from=build /docker/target/x86_64-unknown-linux-musl/release/vetis /bin/vetis
 
 USER vetis:vetis
