@@ -18,11 +18,13 @@ vetis = { version = "0.1.0" }
 
 ## External crates
 
-- vetis-static
-- vetis-rev-proxy
-- vetis-fash
+- vetis-auth
+- vetis-flash
 - vetis-log
-- auth
+- vetis-proxy
+- vetis-rhai
+- vetis-rev-proxy
+- vetis-static
 
 ## Usage Example
 
