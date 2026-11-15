@@ -1,16 +1,16 @@
-use crate::{
-    Request,
-    errors::{ContentError, HostError},
-};
+use crate::{Request, errors::HostError};
 use http::{
     HeaderName, HeaderValue, StatusCode,
-    header::{self},
+    header::{self, CONTENT_LENGTH},
 };
 use hyper::{body::Incoming, service::Service};
 use hyper_body_utils::HttpBody;
 use std::net::SocketAddr;
 use vetis::{
-    LogSender, VetisFutureResult, VetisHosts, debug, error, errors::VetisError, info, log::Logger,
+    LogSender, VetisFutureResult, VetisHosts, debug, error,
+    errors::{RuntimeError, VetisError},
+    info,
+    log::Logger,
 };
 
 /// HttpService is responsible for process HTTP1 and HTTP2 client requests
@@ -84,6 +84,26 @@ where
                 let method = req.method().clone();
                 let uri = req.uri().clone();
 
+                let content_length = req
+                    .headers()
+                    .get(CONTENT_LENGTH);
+                if let Some(length) = content_length
+                    && let Ok(length) = length
+                        .to_str()
+                        .unwrap_or("0")
+                        .parse::<i32>()
+                    && length
+                        > host
+                            .config()
+                            .max_request_size()
+                {
+                    let response = crate::Response::builder()
+                        .status(StatusCode::PAYLOAD_TOO_LARGE)
+                        .empty()
+                        .into_inner();
+                    return Ok(response);
+                }
+
                 if let Some(scheme) = uri.scheme_str()
                     && (scheme.to_lowercase() == "http" || scheme.to_lowercase() == "ws")
                     && host
@@ -107,9 +127,7 @@ where
                         // TODO: Handle HSTS via Strict-Transport-Security?
 
                         let header_value = HeaderValue::from_str(&target).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
                         let response = crate::Response::builder()
                             .status(StatusCode::PERMANENT_REDIRECT)
@@ -122,7 +140,13 @@ where
 
                 // Make a vetis request and route to appropriate path
                 let (parts, body) = req.into_parts();
-                let request = Request::from_parts(parts, HttpBody::incoming(body));
+                let request = Request::from_parts(parts, HttpBody::incoming(body))
+                    .with_root_directory(
+                        host.config()
+                            .root_directory()
+                            .cloned(),
+                    )
+                    .with_client_ip(client_addr.ip());
                 let vetis_response = host
                     .route(request, logger.clone())
                     .await?;
@@ -135,15 +159,11 @@ where
                 if let Some(default_headers) = default_headers {
                     for (key, value) in default_headers.iter() {
                         let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
 
                         let header_value = HeaderValue::from_str(value).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
 
                         response

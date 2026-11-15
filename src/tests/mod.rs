@@ -1,18 +1,17 @@
 #![allow(unreachable_code, dead_code)]
+use crate::{
+    hook::{HandlerFn, HandlerHook, handler_fn},
+    host::Host,
+};
 use http::{StatusCode, Version};
 use vetis::{host::HostConfig, security::TlsConfig};
 use vetis_macros::status_pages;
-
-use crate::host::{
-    Host,
-    path::{HandlerFn, HandlerPath, handler_fn},
-};
+use vetis_matchers::request::{PathMatcher, PathMatcherConfig};
 
 mod host;
 mod io;
 mod lib;
 mod listener;
-mod paths;
 #[cfg(target_os = "linux")]
 mod server;
 mod tls;
@@ -33,7 +32,7 @@ pub(crate) const fn default_protocol_version() -> Version {
 }
 
 fn create_hello_handler() -> HandlerFn {
-    handler_fn(|_request, _ctx| async move {
+    handler_fn(|_request| async move {
         let response = vetis::Response::builder()
             .status(StatusCode::OK)
             .text("Hello from localhost");
@@ -71,14 +70,18 @@ async fn create_host(
         )])
         .build()?;
 
-    let root_path = HandlerPath::builder()
-        .uri("/hello")
+    let root_path = HandlerHook::builder()
+        .matcher(PathMatcher::new(
+            PathMatcherConfig::builder()
+                .add_path("/hello*")
+                .build()?,
+        ))
         .handler(handler)
         .build()?;
 
     let mut host = Host::new(host_config).await?;
 
-    host.add_path(root_path);
+    host.add_hook(root_path);
 
     Ok(host)
 }

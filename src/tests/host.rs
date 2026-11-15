@@ -1,8 +1,6 @@
 use crate::{
-    host::{
-        Host,
-        path::{HandlerPath, handler_fn},
-    },
+    hook::{HandlerHook, handler_fn},
+    host::Host,
     tests::{CA_CERT, SERVER_CERT, SERVER_KEY, create_hello_handler, create_host},
 };
 use caramelo::{expect, matchers::truthy};
@@ -19,13 +17,13 @@ async fn test_add_host() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     let mut host = Host::new(config).await?;
-    host.add_path(
-        HandlerPath::builder()
-            .uri("/")
-            .handler(handler_fn(|_request, _ctx| async move {
-                Ok(vetis::Response::builder()
+    host.add_hook(
+        HandlerHook::builder()
+            .handler(handler_fn(|_request| async move {
+                let response = vetis::Response::builder()
                     .status(StatusCode::OK)
-                    .text("Hello, world!"))
+                    .text("Hello, world!");
+                Ok(response)
             }))
             .build()
             .unwrap(),
