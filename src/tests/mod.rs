@@ -16,11 +16,11 @@ mod listener;
 mod server;
 mod tls;
 
-pub(crate) const CA_CERT: &str = "certs/ca.der";
-pub(crate) const SERVER_CERT: &str = "certs/server.der";
-pub(crate) const SERVER_KEY: &str = "certs/server.key.der";
-pub(crate) const IP6_SERVER_CERT: &str = "certs/ip6-server.der";
-pub(crate) const IP6_SERVER_KEY: &str = "certs/ip6-server.key.der";
+pub(crate) const CA_CERT: &str = "files/certs/ca.der";
+pub(crate) const SERVER_CERT: &str = "files/certs/server.der";
+pub(crate) const SERVER_KEY: &str = "files/certs/server.key.der";
+pub(crate) const IP6_SERVER_CERT: &str = "files/certs/ip6-server.der";
+pub(crate) const IP6_SERVER_KEY: &str = "files/certs/ip6-server.key.der";
 
 pub(crate) const fn default_protocol_version() -> Version {
     #[cfg(not(any(feature = "http2", feature = "http3")))]
@@ -60,7 +60,7 @@ async fn create_host(
         .protos(&[default_protocol_version()])
         .tls(security_config)
         .status_pages(status_pages! {
-            404 @ "files/404.html"
+            404 @ "files/public/404.html"
         })
         .bind_addresses(&[(
             "0.0.0.0"
