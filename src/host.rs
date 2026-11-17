@@ -303,6 +303,8 @@ impl vetis::host::Host for Host {
 
             let mut expr_context = Context::with_env(self.env.clone());
             let mut request_ref = request.as_ref();
+            #[allow(unused)]
+            let mut response_ref = None;
             expr_context
                 .add_variable("request", request_ref)
                 .map_err(|e| {
@@ -346,6 +348,17 @@ impl vetis::host::Host for Host {
                         .map_err(|e| {
                             VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
+
+                    if let Some(ref response) = response {
+                        response_ref = Some(response.as_ref());
+                        expr_context
+                            .add_variable("response", response_ref)
+                            .map_err(|e| {
+                                VetisError::Host(HostError::Runtime(RuntimeError::new(
+                                    &e.to_string(),
+                                )))
+                            })?;
+                    }
                 }
             }
 
