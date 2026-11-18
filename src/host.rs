@@ -16,7 +16,7 @@ pub use vetis::host::HostConfig;
 use vetis::{
     LogSender, Request, Response, VetisFutureResult, VetisHooks, VetisResult, debug, error,
     errors::{ConfigError, HostError, RuntimeError, VetisError},
-    hook::{Hook, HookPhase},
+    hook::{Hook, HookConfig, HookPhase},
     log::Logger,
     security::Tls,
 };
@@ -143,20 +143,31 @@ impl Host {
             .map_err(|e| VetisError::matcher(e.to_compact_string()))?;
 
         let env = Arc::new(env);
-        let mut hooks: VetisHooks = Vec::new();
+        let mut phased_hooks: Vec<(HookPhase, Box<dyn HookConfig>)> = Vec::new();
+
         if let Some(hooks_config) = host_config.hooks() {
-            for hook_config in hooks_config.into_iter() {
+            for hook_config in hooks_config {
                 let mut hook = hook_config.boxed_hook();
                 if let Some(matcher) = hook.matcher_mut() {
                     matcher
                         .compile(env.clone())
-                        .map_err(|e| VetisError::matcher(e.to_compact_string()))?;
+                        .expect("Could not compile matcher!");
                 }
-                hooks.push(hook);
+
+                // Assuming a hook only has one phase, or `Hook` implements Clone / Arc
+                for phase in hook.phases() {
+                    phased_hooks.push((phase, hook_config.boxed_clone())); // or clone
+                }
             }
         }
 
-        hooks.sort();
+        // `sort_by_key` in Rust is a stable sort, preserving config order for equal phases!
+        phased_hooks.sort_by_key(|(phase, _)| *phase);
+
+        let hooks: Vec<_> = phased_hooks
+            .into_iter()
+            .map(|(_, hook_config)| hook_config.boxed_hook())
+            .collect();
 
         Ok(Self { config: host_config, tls, hooks, env })
     }
@@ -313,17 +324,17 @@ impl vetis::host::Host for Host {
 
             for hook in &self.hooks {
                 if hook.has_matches(&expr_context) {
-                    let result = match hook.phase() {
-                        HookPhase::PreProcess
-                        | HookPhase::Rewrite
-                        | HookPhase::Access
-                        | HookPhase::Content
-                            if response.is_none() =>
+                    let result = match hook.phases() {
+                        phases
+                            if phases.contains(HookPhase::PreProcess)
+                                || phases.contains(HookPhase::Rewrite)
+                                || phases.contains(HookPhase::Access)
+                                || phases.contains(HookPhase::Content) && response.is_none() =>
                         {
                             hook.handle(request, response)
                                 .await
                         }
-                        HookPhase::PostContent => {
+                        phases if phases.contains(HookPhase::PostContent) => {
                             hook.handle(request, response)
                                 .await
                         }
