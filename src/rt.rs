@@ -130,7 +130,7 @@ impl VetisBuilder {
     /// or only workers, log and log queue size.
     ///
     /// This method is useful to add extra config settings to server when dealing
-    /// with HandlerPath instances which are not serializable.
+    /// with HandlerHook instances which are not serializable.
     pub fn config(mut self, config: ServerConfig) -> Self {
         self.config = config;
         self
@@ -356,7 +356,7 @@ impl vetis::VetisServer for Vetis {
             .listeners
             .is_empty()
         {
-            return Err(VetisError::Stop("Vetis is not running".to_string()));
+            return Err(VetisError::Stop("Vetis is not running".into()));
         }
 
         for listener in self.listeners {

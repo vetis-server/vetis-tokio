@@ -1,5 +1,5 @@
 use crate::{
-    host::path::handler_fn,
+    hook::handler_fn,
     tests::{
         CA_CERT, SERVER_CERT, SERVER_KEY, create_hello_handler, create_host,
         default_protocol_version,
@@ -16,9 +16,15 @@ use http_body_util::BodyExt;
 use rand::random_range;
 use vetis::{
     VetisServer as _,
-    errors::{ContentError, HostError, VetisError},
+    errors::{HostError, RuntimeError, VetisError},
     host::{Host as _, HostConfig},
 };
+
+#[test]
+fn test_handler_path_builder_validation() {
+    let missing_handler = HandlerHook::builder().build();
+    assert!(matches!(missing_handler, Err(VetisError::Config(ConfigError::Hook(_)))));
+}
 
 #[tokio::test]
 async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,8 +122,10 @@ async fn test_forbidden_traversal() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_auth_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Auth("Nothing".into())))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("Unauthorized").with_status_code(StatusCode::UNAUTHORIZED),
+        )))
     });
 
     let port = random_range(9000..=20000);
@@ -135,8 +143,10 @@ async fn test_auth_error() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_proxy_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Proxy("Nothing".into())))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("Nothing").with_status_code(StatusCode::BAD_GATEWAY),
+        )))
     });
 
     let port = random_range(9000..=20000);
@@ -154,8 +164,10 @@ async fn test_proxy_error() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_content_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Content(ContentError::Forbidden)))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("some message").with_status_code(StatusCode::FORBIDDEN),
+        )))
     });
 
     let port = random_range(9000..=20000);
@@ -172,12 +184,12 @@ async fn test_content_error() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn assert_content_error_status(
-    error: ContentError,
+    error: RuntimeError,
     expected_status: StatusCode,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(move |_request, _ctx| {
+    let handler = handler_fn(move |_request| {
         let error = error.clone();
-        async move { Err(VetisError::Host(HostError::Content(error))) }
+        async move { Err(VetisError::Host(HostError::Runtime(error))) }
     });
 
     let host = create_host(handler, "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
@@ -193,13 +205,9 @@ async fn assert_content_error_status(
 
 #[tokio::test]
 async fn test_content_error_status_mappings() -> Result<(), Box<dyn std::error::Error>> {
-    for (error, expected_status) in [
-        (ContentError::Forbidden, StatusCode::FORBIDDEN),
-        (ContentError::NotFound("missing".into()), StatusCode::NOT_FOUND),
-        (ContentError::InvalidMetadata("invalid".into()), StatusCode::INTERNAL_SERVER_ERROR),
-        (ContentError::InvalidRange("invalid".into()), StatusCode::RANGE_NOT_SATISFIABLE),
-        (ContentError::ServerError("failed".into()), StatusCode::INTERNAL_SERVER_ERROR),
-    ] {
+    for (error, expected_status) in
+        [(RuntimeError::new("some message"), StatusCode::INTERNAL_SERVER_ERROR)]
+    {
         assert_content_error_status(error, expected_status).await?;
     }
 
@@ -212,7 +220,10 @@ async fn test_status_page_uses_configured_file() -> Result<(), Box<dyn std::erro
         create_host(create_hello_handler(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY)
             .await?;
     let response = host
-        .serve_status_page(StatusCode::NOT_FOUND.as_u16(), None)
+        .serve_status_page(
+            RuntimeError::new("some message").with_status_code(StatusCode::NOT_FOUND),
+            None,
+        )
         .await?
         .into_inner();
 
@@ -234,7 +245,7 @@ async fn test_status_page_falls_back_to_reason() -> Result<(), Box<dyn std::erro
         create_host(create_hello_handler(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY)
             .await?;
     let response = host
-        .serve_status_page(StatusCode::INTERNAL_SERVER_ERROR.as_u16(), None)
+        .serve_status_page(RuntimeError::new("some message"), None)
         .await?
         .into_inner();
 
@@ -259,27 +270,13 @@ async fn test_status_page_without_configuration() -> Result<(), Box<dyn std::err
     )
     .await?;
     let response = host
-        .serve_status_page(StatusCode::NOT_FOUND.as_u16(), None)
+        .serve_status_page(
+            RuntimeError::new("some message").with_status_code(StatusCode::NOT_FOUND),
+            None,
+        )
         .await?
         .into_inner();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_status_page_rejects_invalid_status() -> Result<(), Box<dyn std::error::Error>> {
-    let host = crate::host::Host::new(
-        HostConfig::builder()
-            .hostname("localhost")
-            .build()?,
-    )
-    .await?;
-
-    assert!(
-        host.serve_status_page(99, None)
-            .await
-            .is_err()
-    );
     Ok(())
 }

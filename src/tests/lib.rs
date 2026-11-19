@@ -1,14 +1,11 @@
 use crate::{
-    host::{
-        Host,
-        path::{HandlerPath, handler_fn},
-    },
+    hook::{HandlerHook, handler_fn},
+    host::Host,
     rt::Vetis,
 };
 use http::StatusCode;
 use vetis::{
-    Response, VetisServer as _, VetisTestResult, host::HostConfig, listener::Listener,
-    server::ServerConfig,
+    VetisServer as _, VetisTestResult, host::HostConfig, listener::Listener, server::ServerConfig,
 };
 
 #[tokio::test]
@@ -26,16 +23,16 @@ async fn test_vetis_add_host() -> VetisTestResult<()> {
 
     let mut vhost = Host::new(vhost_config).await?;
 
-    let handler_path = HandlerPath::builder()
-        .uri("/")
-        .handler(handler_fn(|_request, _ctx| async move {
-            Ok(Response::builder()
+    let handler_hook = HandlerHook::builder()
+        .handler(handler_fn(|_request| async move {
+            let response = vetis::Response::builder()
                 .status(StatusCode::OK)
-                .text("Hello, World!"))
+                .text("Hello, world!");
+            Ok(response)
         }))
         .build()?;
 
-    vhost.add_path(handler_path);
+    vhost.add_hook(handler_hook);
 
     let mut server = Vetis::builder()
         .add_host(vhost)
@@ -130,16 +127,16 @@ async fn test_vetis_add_multiple_hosts() -> VetisTestResult<()> {
 
         let mut vhost = Host::new(vhost_config).await?;
 
-        let handler_path = HandlerPath::builder()
-            .uri("/")
-            .handler(handler_fn(|_request, _ctx| async move {
-                Ok(Response::builder()
+        let handler_path = HandlerHook::builder()
+            .handler(handler_fn(|_request| async move {
+                let response = vetis::Response::builder()
                     .status(StatusCode::OK)
-                    .text("Hello, World!"))
+                    .text("Hello, world!");
+                Ok(response)
             }))
             .build()?;
 
-        vhost.add_path(handler_path);
+        vhost.add_hook(handler_path);
 
         server = server
             .add_host(vhost)

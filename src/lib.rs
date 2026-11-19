@@ -3,6 +3,8 @@
 #[cfg(all(feature = "http3", not(feature = "rust-tls")))]
 compile_error!("http3 requires rust-tls!");
 
+/// Hook module
+pub mod hook;
 /// Host module
 pub mod host;
 /// IO module
@@ -23,10 +25,9 @@ pub(crate) mod worker;
 
 pub use crate::rt::Vetis;
 pub use vetis::{
-    VetisHosts,
+    VetisFutureResult, VetisHosts, VetisResult,
     base::VetisServer,
     errors,
-    host::HostConfig,
     listener::{Listener as VetisListener, ListenerConfig},
     request::Request,
     response::Response,

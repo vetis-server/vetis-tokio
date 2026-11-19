@@ -1,4 +1,5 @@
 use crate::{VetisHosts, host::Host, tls::TlsFactory, worker::udp::UdpWorker};
+use compact_str::ToCompactString;
 use crossfire::{
     MAsyncRx, MAsyncTx,
     mpmc::{self, Array},
@@ -14,7 +15,7 @@ use tokio::{
 };
 use vetis::{
     LogSender, VetisResult, error,
-    errors::{ListenerError, StartError, VetisError},
+    errors::{ListenerError, StartupError, VetisError},
     host::Host as _,
     info,
     listener::ListenerConfig,
@@ -127,11 +128,11 @@ impl vetis::listener::Listener for UdpListener {
                 self.config.port(),
             ))
             .await
-            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_compact_string())))?;
 
             let local_addr = listener
                 .local_addr()
-                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_compact_string())))?;
 
             self.config
                 .reassign_port(local_addr.port());
@@ -164,10 +165,10 @@ impl vetis::listener::Listener for UdpListener {
             );
             tokio::net::UdpSocket::bind(addr)
                 .await
-                .map_err(|e| VetisError::Bind(e.to_string()))?
+                .map_err(|e| VetisError::bind(e.to_compact_string()))?
         }
         .into_std()
-        .map_err(|e| VetisError::Bind(e.to_string()))?;
+        .map_err(|e| VetisError::bind(e.to_compact_string()))?;
 
         let (shut_sender, shut_recv) = watch::channel(false);
         let mut shut_signal = shut_recv.clone();
@@ -175,15 +176,15 @@ impl vetis::listener::Listener for UdpListener {
 
         let tls_config = TlsFactory::create_tls_config(self.hosts.clone()).await?;
         let quic_config = QuicServerConfig::try_from(tls_config)
-            .map_err(|e| VetisError::Start(StartError::Tls(e.to_string())))?;
+            .map_err(|e| VetisError::Startup(StartupError::Tls(e.to_compact_string())))?;
         let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
 
         let runtime =
-            default_runtime().ok_or_else(|| VetisError::Bind("no async runtime found".into()))?;
+            default_runtime().ok_or_else(|| VetisError::bind("no async runtime found"))?;
 
         let listener =
             Endpoint::new(EndpointConfig::default(), Some(server_config), socket, runtime)
-                .map_err(|e| VetisError::Bind(e.to_string()))?;
+                .map_err(|e| VetisError::bind(e.to_compact_string()))?;
 
         let mut dispatcher = ConnectionDispatcher::new(
             listener,
@@ -310,7 +311,7 @@ impl ConnectionDispatcher {
         {
             let conn = new_conn
                 .await
-                .map_err(|e| VetisError::Worker(e.to_string()))?;
+                .map_err(|e| VetisError::worker(e.to_compact_string()))?;
 
             if let Some(sender) = self.sender.as_ref()
                 && let Err(e) = sender

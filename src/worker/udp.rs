@@ -1,5 +1,6 @@
 use crate::{host::Host, service::quic::HttpService};
 use bytes::Bytes;
+use compact_str::ToCompactString;
 use crossfire::{MAsyncRx, mpmc::Array};
 use futures_util::StreamExt;
 use h3::{
@@ -82,7 +83,7 @@ impl UdpWorker {
                     }
                     res = builder.serve_connection(udp_stream, service, logger.clone()) => {
                         conns.pin().remove(&client_addr);
-                        res.map_err(|e| VetisError::Worker(e.to_string()))
+                        res.map_err(|e| VetisError::worker(e.to_compact_string()))
                     }
                 }
             });
@@ -165,20 +166,9 @@ impl Builder {
             .call(request)
             .await;
 
-        if response.is_err() {
-            error!(
-                logger,
-                "Error serving connection: {:?}",
-                response
-                    .as_ref()
-                    .err()
-            );
-            return Err(VetisError::Worker(
-                response
-                    .err()
-                    .unwrap()
-                    .to_string(),
-            ));
+        if let Err(err) = response {
+            error!(logger, "Error serving connection: {:?}", err);
+            return Err(VetisError::worker(err.to_compact_string()));
         }
 
         Ok(())
@@ -200,20 +190,9 @@ impl Builder {
             .call(request)
             .await;
 
-        if response.is_err() {
-            error!(
-                logger,
-                "Error serving connection: {:?}",
-                response
-                    .as_ref()
-                    .err()
-            );
-            return Err(VetisError::Worker(
-                response
-                    .err()
-                    .unwrap()
-                    .to_string(),
-            ));
+        if let Err(err) = response {
+            error!(logger, "Error serving connection: {:?}", err);
+            return Err(VetisError::worker(err.to_compact_string()));
         }
 
         if let Ok(response) = response {
@@ -247,7 +226,7 @@ impl Builder {
                         send_stream
                             .send_data(bytes)
                             .await
-                            .map_err(|e| VetisError::Worker(e.to_string()))?;
+                            .map_err(|e| VetisError::worker(e.to_compact_string()))?;
                     }
                 }
             }
@@ -255,7 +234,7 @@ impl Builder {
             send_stream
                 .finish()
                 .await
-                .map_err(|e| VetisError::Worker(e.to_string()))?;
+                .map_err(|e| VetisError::worker(e.to_compact_string()))?;
         }
 
         Ok(())
@@ -276,12 +255,12 @@ impl Builder {
             .max_webtransport_sessions(1)
             .build(QuinnConnection::new(conn))
             .await
-            .map_err(|e| VetisError::Worker(e.to_string()))?;
+            .map_err(|e| VetisError::worker(e.to_compact_string()))?;
 
         while let Some(resolver) = h3_conn
             .accept()
             .await
-            .map_err(|e| VetisError::Worker(e.to_string()))?
+            .map_err(|e| VetisError::worker(e.to_compact_string()))?
         {
             if let Ok((req, stream)) = resolver
                 .resolve_request()

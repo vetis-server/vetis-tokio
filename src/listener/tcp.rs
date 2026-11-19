@@ -1,4 +1,5 @@
 use crate::{VetisHosts, host::Host, tls::TlsFactory, worker::tcp::TcpWorker};
+use compact_str::ToCompactString;
 use crossfire::{
     MAsyncRx, MAsyncTx,
     mpmc::{self, Array},
@@ -127,11 +128,11 @@ impl vetis::listener::Listener for TcpListener {
                 self.config.port(),
             ))
             .await
-            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+            .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_compact_string())))?;
 
             let local_addr = listener
                 .local_addr()
-                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_string())))?;
+                .map_err(|e| VetisError::Listener(ListenerError::Bind(e.to_compact_string())))?;
 
             self.config
                 .reassign_port(local_addr.port());
@@ -165,7 +166,7 @@ impl vetis::listener::Listener for TcpListener {
         } else {
             tokio::net::TcpListener::bind(addr)
                 .await
-                .map_err(|e| VetisError::Bind(e.to_string()))?
+                .map_err(|e| VetisError::bind(e.to_compact_string()))?
         };
 
         let (sender, receiver) = watch::channel(false);

@@ -1,4 +1,4 @@
-use http::{HeaderName, HeaderValue, StatusCode};
+use http::{HeaderName, HeaderValue, StatusCode, header::CONTENT_LENGTH};
 use hyper::service::Service;
 use hyper_body_utils::HttpBody;
 use std::net::SocketAddr;
@@ -79,6 +79,26 @@ where
                     .uri()
                     .path()
                     .to_string();
+
+                let content_length = request
+                    .headers()
+                    .get(CONTENT_LENGTH);
+                if let Some(length) = content_length
+                    && let Ok(length) = length
+                        .to_str()
+                        .unwrap_or("0")
+                        .parse::<i32>()
+                    && length
+                        > host
+                            .config()
+                            .max_request_size()
+                {
+                    let response = crate::Response::builder()
+                        .status(StatusCode::PAYLOAD_TOO_LARGE)
+                        .empty()
+                        .into_inner();
+                    return Ok(response);
+                }
 
                 let vetis_response = host
                     .route(request, logger.clone())

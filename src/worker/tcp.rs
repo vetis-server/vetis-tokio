@@ -1,10 +1,12 @@
 use crate::{host::Host, service::http::HttpService};
+use compact_str::ToCompactString;
 use crossfire::{AsyncRxTrait, MAsyncRx, mpmc::Array};
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto,
 };
 use papaya::HashMap;
+use peekable::tokio::AsyncPeekable;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
     net::TcpStream,
@@ -70,14 +72,15 @@ impl TcpWorker {
             .await
         {
             let Ok(client_addr) = tcp_stream.peer_addr() else {
-                return Err(VetisError::Worker("Unkown client address".into()));
+                return Err(VetisError::worker("Unkown client address"));
             };
 
+            let mut peekable = AsyncPeekable::from(tcp_stream);
             let mut buf = [0; 2];
-            tcp_stream
-                .peek(&mut buf)
+            peekable
+                .peek_exact(&mut buf)
                 .await
-                .map_err(|e| VetisError::Worker(e.to_string()))?;
+                .map_err(|e| VetisError::worker(e.to_compact_string()))?;
 
             let service = HttpService::new(self.hosts.clone(), client_addr, self.logger.clone());
             let is_tls = buf.starts_with(&[0x16, 0x03]);
@@ -90,9 +93,9 @@ impl TcpWorker {
                 let mut shut_signal = shut_send.subscribe();
                 tokio::spawn(async move {
                     let tls_stream = tls_acceptor
-                        .accept(tcp_stream)
+                        .accept(peekable)
                         .await
-                        .map_err(|e| VetisError::Worker(e.to_string()))?;
+                        .map_err(|e| VetisError::worker(e.to_compact_string()))?;
 
                     let builder = auto::Builder::new(TokioExecutor::new());
                     tokio::select! {
@@ -102,7 +105,7 @@ impl TcpWorker {
                         }
                         res = builder.serve_connection_with_upgrades(TokioIo::new(tls_stream), service) => {
                             conns.pin().remove(&client_addr);
-                            res.map_err(|e| VetisError::Worker(e.to_string()))
+                            res.map_err(|e| VetisError::worker(e.to_compact_string()))
                         }
                     }
                 })
@@ -119,9 +122,9 @@ impl TcpWorker {
                             info!(logger, "Closing connection {}...", client_addr);
                             Ok(())
                         }
-                        res = builder.serve_connection_with_upgrades(TokioIo::new(tcp_stream), service) => {
+                        res = builder.serve_connection_with_upgrades(TokioIo::new(peekable), service) => {
                             conns.pin().remove(&client_addr);
-                            res.map_err(|e| VetisError::Worker(e.to_string()))
+                            res.map_err(|e| VetisError::worker(e.to_compact_string()))
                         }
                     }
                 })
