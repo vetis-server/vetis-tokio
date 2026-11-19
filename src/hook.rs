@@ -2,10 +2,9 @@
 use cel::Context;
 use hyper_body_utils::HttpBody;
 use vetis::{
-    HookPhases, Request, Response, VetisFutureResult, VetisResult,
+    Request, Response, VetisFutureResult, VetisResult,
     errors::{ConfigError, VetisError},
-    hook::{Hook, HookPhase},
-    make_bitflags,
+    hook::{Hook, HookPhase, HookPhases},
     matcher::Matcher,
 };
 
@@ -148,7 +147,7 @@ impl Hook for HandlerHook {
     }
 
     fn phases(&self) -> HookPhases {
-        make_bitflags!(HookPhase::Content)
+        HookPhases::new(HookPhase::Content)
     }
 
     fn matcher_mut(&mut self) -> Option<&mut Box<dyn Matcher>> {

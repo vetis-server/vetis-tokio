@@ -147,26 +147,27 @@ impl Host {
 
         if let Some(hooks_config) = host_config.hooks() {
             for hook_config in hooks_config {
+                let hook = hook_config.boxed_hook();
+                for phase in hook.phases() {
+                    println!("Phase: {:?}", phase);
+                    phased_hooks.push((phase, hook_config.boxed_clone()));
+                }
+            }
+        }
+
+        phased_hooks.sort_by_key(|(phase, _)| *phase);
+
+        let hooks: Vec<_> = phased_hooks
+            .into_iter()
+            .map(|(_, hook_config)| {
                 let mut hook = hook_config.boxed_hook();
                 if let Some(matcher) = hook.matcher_mut() {
                     matcher
                         .compile(env.clone())
                         .expect("Could not compile matcher!");
                 }
-
-                // Assuming a hook only has one phase, or `Hook` implements Clone / Arc
-                for phase in hook.phases() {
-                    phased_hooks.push((phase, hook_config.boxed_clone())); // or clone
-                }
-            }
-        }
-
-        // `sort_by_key` in Rust is a stable sort, preserving config order for equal phases!
-        phased_hooks.sort_by_key(|(phase, _)| *phase);
-
-        let hooks: Vec<_> = phased_hooks
-            .into_iter()
-            .map(|(_, hook_config)| hook_config.boxed_hook())
+                hook
+            })
             .collect();
 
         Ok(Self { config: host_config, tls, hooks, env })
@@ -181,6 +182,7 @@ impl Host {
     where
         H: Hook + Send + Sync + 'static,
     {
+        // TODO: Rebuild list of hooks and sort it properly
         if let Some(matcher) = hook.matcher_mut() {
             matcher
                 .compile(self.env.clone())
@@ -323,24 +325,33 @@ impl vetis::host::Host for Host {
                 })?;
 
             for hook in &self.hooks {
+                println!("Added hooks");
                 if hook.has_matches(&expr_context) {
-                    let result = match hook.phases() {
-                        phases
-                            if phases.contains(HookPhase::PreProcess)
-                                || phases.contains(HookPhase::Rewrite)
-                                || phases.contains(HookPhase::Access)
-                                || phases.contains(HookPhase::Content) && response.is_none() =>
-                        {
-                            hook.handle(request, response)
-                                .await
-                        }
-                        phases if phases.contains(HookPhase::PostContent) => {
-                            hook.handle(request, response)
-                                .await
-                        }
-                        _ => {
-                            continue;
-                        }
+                    println!("Hook phases: {:?}", hook.phases());
+                    let result = if (hook
+                        .phases()
+                        .contains(HookPhase::PreProcess)
+                        || hook
+                            .phases()
+                            .contains(HookPhase::Rewrite)
+                        || hook
+                            .phases()
+                            .contains(HookPhase::Access)
+                        || hook
+                            .phases()
+                            .contains(HookPhase::Content))
+                        && response.is_none()
+                    {
+                        hook.handle(request, response)
+                            .await
+                    } else if hook
+                        .phases()
+                        .contains(HookPhase::PostContent)
+                    {
+                        hook.handle(request, response)
+                            .await
+                    } else {
+                        continue;
                     };
 
                     if let Err(VetisError::Host(HostError::Runtime(e))) = result {
