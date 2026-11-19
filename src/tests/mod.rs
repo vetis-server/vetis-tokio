@@ -14,6 +14,7 @@ mod lib;
 mod listener;
 #[cfg(target_os = "linux")]
 mod server;
+mod service;
 mod tls;
 
 pub(crate) const CA_CERT: &str = "files/certs/ca.der";

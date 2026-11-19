@@ -325,9 +325,7 @@ impl vetis::host::Host for Host {
                 })?;
 
             for hook in &self.hooks {
-                println!("Added hooks");
                 if hook.has_matches(&expr_context) {
-                    println!("Hook phases: {:?}", hook.phases());
                     let result = if (hook
                         .phases()
                         .contains(HookPhase::PreProcess)
