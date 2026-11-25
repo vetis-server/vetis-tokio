@@ -126,9 +126,9 @@ where
                             .enable_hsts()
                     {
                         let target = if let Some(query) = uri.query() {
-                            format!("{scheme}://{hostname}{}{}", uri.path(), query)
+                            format!("{scheme}s://{hostname}{}{}", uri.path(), query)
                         } else {
-                            format!("{scheme}://{hostname}{}", uri.path())
+                            format!("{scheme}s://{hostname}{}", uri.path())
                         };
 
                         // TODO: Handle HSTS via Strict-Transport-Security?

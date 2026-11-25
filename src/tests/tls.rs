@@ -1,3 +1,5 @@
+use std::net::Ipv4Addr;
+
 use crate::{
     hook::{HandlerHookConfig, handler_fn},
     host::Host,
@@ -76,6 +78,7 @@ async fn create_test_hosts_invalid_key() -> VetisTestResult<VetisHosts<Host>> {
     let host_config = HostConfig::builder()
         .hostname("localhost")
         .tls(tls_config)
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 8080)
         .add_hook(
             HandlerHookConfig::builder()
                 .handler(handler_fn(|_request| async move {

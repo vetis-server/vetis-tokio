@@ -115,6 +115,8 @@ impl Vetis {
     }
 
     async fn start_listeners(&mut self) -> VetisResult<()> {
+        info!(target: "vetis", "Starting listeners...");
+
         // Build and start listeners based on hosts configuration
         // Each host can bind to one of most listeners.
         // Here we build a registry of hosts and pass this registry
@@ -210,27 +212,31 @@ impl Vetis {
             }
         }
 
-        info!(target: "vetis", "Starting listeners...");
         let (shut_sender, shut_recv) = watch::channel(false);
         let hosts = Arc::new(hosts);
-        let mut addresses = String::new();
+        let mut tcp_addresses = Vec::new();
+        #[cfg(feature = "http3")]
+        let mut udp_addresses = Vec::new();
         for mut listener in listeners {
             let mut shut_signal = shut_recv.clone();
 
+            let addr = format!(
+                "{}:{}",
+                listener
+                    .config()
+                    .interface(),
+                listener
+                    .config()
+                    .port()
+            );
             match &listener {
-                Listener::Tcp(tcp) => addresses.push_str(&format!(
-                    "[TCP] {}:{}",
-                    tcp.config()
-                        .interface(),
-                    tcp.config().port()
-                )),
+                Listener::Tcp(_) => {
+                    tcp_addresses.push(addr);
+                }
                 #[cfg(feature = "http3")]
-                Listener::Udp(_) => addresses.push_str(&format!(
-                    "[UDP] {}:{}",
-                    tcp.config()
-                        .interface(),
-                    tcp.config().port()
-                )),
+                Listener::Udp(_) => {
+                    udp_addresses.push(addr);
+                }
             }
 
             let hosts = hosts.clone();
@@ -250,7 +256,21 @@ impl Vetis {
                 .spawn(listener_future);
         }
 
-        info!(target: "vetis", "Server listening on {addresses}");
+        let mut addresses = String::new();
+        if !tcp_addresses.is_empty() {
+            addresses.push_str("[TCP] ");
+            addresses.push_str(&tcp_addresses.join(", "));
+        }
+
+        #[cfg(feature = "http3")]
+        {
+            if udp_addresses.is_empty() {
+                addresses.push_str("[UDP] ");
+                addresses.push_str(&udp_addresses.join(", "));
+            }
+        }
+
+        info!(target: "vetis", "Server listening on {}", addresses);
 
         self.signal = Some(shut_sender);
 
@@ -270,16 +290,6 @@ impl vetis::VetisServer for Vetis {
     /// configured when the server was created.
     fn config(&self) -> &ServerConfig {
         &self.config
-    }
-
-    /// Starts the server and runs until interrupted.
-    ///
-    /// Please note signal handling should be handled by app code, not here
-    /// since it is just a runtime specific crate, for now we only print
-    /// listeners information to help on user access.
-    async fn run(&mut self) -> VetisResult<()> {
-        self.start().await?;
-        Ok(())
     }
 
     /// Starts the server without blocking.

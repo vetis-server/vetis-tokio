@@ -1,10 +1,8 @@
-use std::net::IpAddr;
-
 use crate::{
     hook::{HandlerHookConfig, handler_fn},
     tests::{
-        CA_CERT, IP6_SERVER_CERT, IP6_SERVER_KEY, SERVER_CERT, SERVER_KEY, create_hello_handler,
-        create_host, default_protocol_version,
+        CA_CERT, IP6_SERVER_CERT, IP6_SERVER_KEY, SERVER_CERT, SERVER_KEY, create_hello_hook,
+        default_protocol_version,
     },
 };
 use deboa::{
@@ -14,6 +12,7 @@ use deboa::{
 use deboa_tokio::{Client, cert::DeboaCertificate};
 use http::{StatusCode, Version};
 use rand::random_range;
+use std::net::{IpAddr, Ipv4Addr};
 use vetis::{VetisServer, VetisTestResult, host::HostConfig, security::TlsConfig};
 use vetis_matchers::request::PathMatcherConfig;
 
@@ -36,12 +35,7 @@ async fn test_no_https_error() -> VetisTestResult<()> {
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
         .add_proto(Version::HTTP_11)
-        .add_bind_address(
-            "0.0.0.0"
-                .parse::<IpAddr>()
-                .unwrap(),
-            55000,
-        )
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 55000)
         .add_hook(ip4_root_hook)
         .build()?;
 
@@ -85,12 +79,7 @@ async fn test_http() -> VetisTestResult<()> {
         .hostname("localhost")
         .add_default_header("x-vetis-test", "default")
         .add_proto(Version::HTTP_11)
-        .add_bind_address(
-            "0.0.0.0"
-                .parse::<IpAddr>()
-                .unwrap(),
-            55002,
-        )
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 55002)
         .add_hook(ip4_root_path)
         .build()?;
 
@@ -128,27 +117,8 @@ async fn test_http_redirects_to_tls_when_hsts_is_enabled() -> VetisTestResult<()
         .allow_unsafe_connections(true)
         .enable_hsts(true)
         .add_proto(Version::HTTP_11)
-        .add_bind_address(
-            "0.0.0.0"
-                .parse::<IpAddr>()
-                .unwrap(),
-            port,
-        )
-        .add_hook(
-            HandlerHookConfig::builder()
-                .matcher(
-                    PathMatcherConfig::builder()
-                        .add_path("/hello*")
-                        .build()?,
-                )
-                .handler(handler_fn(|_request| async move {
-                    let response = vetis::Response::builder()
-                        .status(StatusCode::OK)
-                        .text("Hello from ipv4");
-                    Ok(response)
-                }))
-                .build()?,
-        )
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, port)
+        .add_hook(create_hello_hook())
         .build()?;
     let mut server = crate::Vetis::builder()
         .add_host(config)
@@ -163,7 +133,7 @@ async fn test_http_redirects_to_tls_when_hsts_is_enabled() -> VetisTestResult<()
         .await?;
 
     assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
-    assert_eq!(response.headers()["location"], format!("http://localhost:{port}/hello"));
+    assert_eq!(response.headers()["location"], format!("https://localhost:{port}/hello"));
     server
         .stop()
         .await?;
@@ -173,9 +143,13 @@ async fn test_http_redirects_to_tls_when_hsts_is_enabled() -> VetisTestResult<()
 #[tokio::test]
 async fn test_unknown_host() -> VetisTestResult<()> {
     let port = random_range(9000..=20000);
-    let host =
-        create_host(create_hello_handler(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
-            .await?;
+    let host = HostConfig::builder()
+        .hostname("localhost")
+        .allow_unsafe_connections(true)
+        .add_proto(Version::HTTP_11)
+        .add_bind_address(Ipv4Addr::LOCALHOST, port)
+        .add_hook(create_hello_hook())
+        .build()?;
     let mut server = crate::Vetis::builder()
         .add_host(host)
         .build();

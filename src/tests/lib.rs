@@ -34,7 +34,9 @@ async fn test_vetis_add_host() -> VetisTestResult<()> {
         .add_host(vhost_config)
         .build();
 
-    server.run().await?;
+    server
+        .start()
+        .await?;
     server
         .stop()
         .await?;
@@ -79,7 +81,8 @@ async fn test_vetis_from_config_reserves_ephemeral_port() -> VetisTestResult<()>
 
     assert_eq!(
         server
-            .listeners()
+            .config()
+            .hosts()
             .len(),
         1
     );

@@ -236,19 +236,12 @@ impl vetis::listener::Listener for TcpListener {
 
         let tls_config_resolver = Arc::new(TlsConfigResolver::create_tls_config(hosts.clone())?);
         loop {
-            let Ok((tcp_stream, _)) = listener
+            let result = listener
                 .accept()
-                .await
-            else {
-                debug!(
-                    self.logger,
-                    "Cannot accept connection: {:?}",
-                    listener
-                        .accept()
-                        .await
-                        .err()
-                );
+                .await;
 
+            let Ok((tcp_stream, _)) = result else {
+                debug!(self.logger, "Cannot accept connection: {:?}", result.err());
                 continue;
             };
 

@@ -1,5 +1,5 @@
 #![allow(unreachable_code, dead_code)]
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 
 use crate::hook::{HandlerFn, HandlerHookConfig, handler_fn};
 use http::{StatusCode, Version};
@@ -40,8 +40,21 @@ fn create_hello_handler() -> HandlerFn {
     })
 }
 
+fn create_hello_hook() -> HandlerHookConfig {
+    HandlerHookConfig::builder()
+        .matcher(
+            PathMatcherConfig::builder()
+                .add_path("/hello*")
+                .build()
+                .unwrap(),
+        )
+        .handler(create_hello_handler())
+        .build()
+        .unwrap()
+}
+
 async fn create_host(
-    handler: HandlerFn,
+    hook_config: HandlerHookConfig,
     hostname: &str,
     port: u16,
     ca: &str,
@@ -54,23 +67,14 @@ async fn create_host(
         .key_file(key)
         .build()?;
 
-    let root_path = HandlerHookConfig::builder()
-        .matcher(
-            PathMatcherConfig::builder()
-                .add_path("/hello*")
-                .build()?,
-        )
-        .handler(handler)
-        .build()?;
-
     let host_config = HostConfig::builder()
         .hostname(hostname)
         .root_directory(".")
         .tls(tls_config)
         .add_proto(default_protocol_version())
         .add_status_page(404, "files/public/404.html".into())
-        .add_bind_address(Ipv4Addr::UNSPECIFIED, port)
-        .add_hook(root_path)
+        .add_bind_address(Ipv4Addr::LOCALHOST, port)
+        .add_hook(hook_config)
         .build()?;
 
     Ok(host_config)
