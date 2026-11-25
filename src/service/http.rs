@@ -9,7 +9,6 @@ use std::net::SocketAddr;
 use vetis::{
     LogSender, VetisFutureResult, VetisHosts, debug, error,
     errors::{RuntimeError, VetisError},
-    info,
     log::Logger,
 };
 
@@ -47,12 +46,15 @@ where
 
     type Future = VetisFutureResult<'static, Self::Response>;
 
-    fn call(&self, req: http::request::Request<Incoming>) -> Self::Future {
+    fn call(&self, mut req: http::request::Request<Incoming>) -> Self::Future {
         let hosts = self.hosts.clone();
         let logger = self.logger.clone();
-        let client_addr = self
-            .client_addr
-            .clone();
+        req.extensions_mut()
+            .insert(
+                self.client_addr
+                    .ip()
+                    .clone(),
+            );
         let future = async move {
             let Some(hostname) = req
                 .uri()
@@ -80,9 +82,14 @@ where
             let hosts = hosts.pin_owned();
             let host = hosts.get(&hostname);
             if let Some(host) = host {
-                let version = req.version();
-                let method = req.method().clone();
                 let uri = req.uri().clone();
+                if let Some(root_directory) = host
+                    .config()
+                    .root_directory()
+                {
+                    req.extensions_mut()
+                        .insert(root_directory.clone());
+                }
 
                 let content_length = req
                     .headers()
@@ -140,13 +147,7 @@ where
 
                 // Make a vetis request and route to appropriate path
                 let (parts, body) = req.into_parts();
-                let request = Request::from_parts(parts, HttpBody::incoming(body))
-                    .with_root_directory(
-                        host.config()
-                            .root_directory()
-                            .cloned(),
-                    )
-                    .with_client_ip(client_addr.ip());
+                let request = Request::from_parts(parts, HttpBody::incoming(body));
                 let vetis_response = host
                     .route(request, logger.clone())
                     .await?;
@@ -172,6 +173,7 @@ where
                     }
                 }
 
+                /*
                 let message = if let Some(query) = uri.query() {
                     format!(
                         "{} {} {}?{} {:?} {}",
@@ -195,6 +197,7 @@ where
 
                 info!(logger, target: "vetis", "{}", message);
                 info!(logger, target: &hostname, "{}", message);
+                */
 
                 Ok::<http::Response<HttpBody>, VetisError>(response)
             } else {

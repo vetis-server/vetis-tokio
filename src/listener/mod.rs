@@ -1,12 +1,18 @@
-use crate::host::Host;
-use crate::listener::Listener::Tcp;
 #[cfg(feature = "http3")]
 use crate::listener::Listener::Udp;
 use crate::listener::tcp::TcpListener;
 #[cfg(feature = "http3")]
 use crate::listener::udp::UdpListener;
-use std::{hash::Hash, sync::Arc};
-use vetis::{LogSender, VetisResult, listener::ListenerConfig, log::Logger};
+use crate::{host::Host, listener::Listener::Tcp};
+use std::{
+    fmt::{Display, Formatter},
+    hash::Hash,
+};
+use vetis::{
+    LogSender, VetisHosts, VetisResult,
+    listener::{Listener as _, ListenerConfig},
+    log::Logger,
+};
 
 pub(crate) mod tcp;
 #[cfg(feature = "http3")]
@@ -19,6 +25,32 @@ pub enum Listener {
     /// UDP listener
     #[cfg(feature = "http3")]
     Udp(UdpListener),
+}
+
+impl Display for Listener {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tcp(tcp_listener) => f.write_fmt(format_args!(
+                "{}:{}",
+                tcp_listener
+                    .config()
+                    .interface(),
+                tcp_listener
+                    .config()
+                    .port()
+            )),
+            #[cfg(feature = "http3")]
+            Udp(udp_listener) => f.write_fmt(format_args!(
+                "{}:{}",
+                udp_listener
+                    .config()
+                    .interface(),
+                udp_listener
+                    .config()
+                    .port()
+            )),
+        }
+    }
 }
 
 impl Hash for Listener {
@@ -72,36 +104,11 @@ impl vetis::listener::Listener for Listener {
     type RuntimeHost = Host;
     type Logger = Logger<LogSender>;
 
-    fn add_host(&mut self, host: Arc<Self::RuntimeHost>) -> VetisResult<()> {
-        match self {
-            Listener::Tcp(tcp_listener) => tcp_listener.add_host(host),
-            #[cfg(feature = "http3")]
-            Listener::Udp(udp_listener) => udp_listener.add_host(host),
-        }
-    }
-
-    fn remove_host(&mut self, hostname: &str) -> VetisResult<()> {
-        match self {
-            Listener::Tcp(tcp_listener) => tcp_listener.remove_host(hostname),
-            #[cfg(feature = "http3")]
-            Listener::Udp(udp_listener) => udp_listener.remove_host(hostname),
-        }
-    }
-
     fn logger(&mut self, logger: Self::Logger) {
         match self {
             Listener::Tcp(tcp_listener) => tcp_listener.logger(logger),
             #[cfg(feature = "http3")]
             Listener::Udp(udp_listener) => udp_listener.logger(logger),
-        }
-    }
-
-    /// Return total hosts count
-    fn total_hosts(&self) -> usize {
-        match self {
-            Listener::Tcp(tcp_listener) => tcp_listener.total_hosts(),
-            #[cfg(feature = "http3")]
-            Listener::Udp(udp_listener) => udp_listener.total_hosts(),
         }
     }
 
@@ -137,17 +144,17 @@ impl vetis::listener::Listener for Listener {
         }
     }
 
-    async fn listen(&mut self) -> VetisResult<()> {
+    async fn listen(&mut self, hosts: VetisHosts<Self::RuntimeHost>) -> VetisResult<()> {
         match self {
             Listener::Tcp(tcp_listener) => {
                 tcp_listener
-                    .listen()
+                    .listen(hosts)
                     .await?
             }
             #[cfg(feature = "http3")]
             Listener::Udp(udp_listener) => {
                 udp_listener
-                    .listen()
+                    .listen(hosts)
                     .await?
             }
         }

@@ -1,36 +1,43 @@
 use crate::host::Host;
-use compact_str::{ToCompactString, format_compact};
+use compact_str::ToCompactString;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
-    server::ResolvesServerCertUsingSni,
-    sign::CertifiedKey,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use vetis::{
-    VetisHosts,
+    Str, VetisHosts,
     errors::{StartupError, VetisError},
     security::Alpn,
 };
 
-pub(crate) struct TlsFactory {}
+pub(crate) struct TlsConfigResolver {
+    pub(crate) hosts_tls_config: HashMap<Str, Arc<ServerConfig>>,
+}
 
-impl TlsFactory {
-    pub(crate) async fn create_tls_config(
-        hosts: VetisHosts<Host>,
-    ) -> Result<Arc<ServerConfig>, VetisError> {
+impl TlsConfigResolver {
+    pub(crate) fn create_tls_config(hosts: VetisHosts<Host>) -> Result<Self, VetisError> {
         let hosts = hosts.clone();
-        #[cfg(feature = "__rustls_awc_lc_rs")]
-        let provider = rustls::crypto::aws_lc_rs::default_provider();
-        #[cfg(feature = "__rustls_ring")]
-        let provider = rustls::crypto::ring::default_provider();
-        let mut resolver = ResolvesServerCertUsingSni::new();
-        let mut alpns: HashSet<Vec<u8>> = HashSet::new();
+        let mut sni_tls_config_map = HashMap::new();
         for (hostname, host) in hosts
             .pin_owned()
             .iter()
         {
             if let Some(tls) = host.tls() {
+                let mut alpns: HashSet<Vec<u8>> = HashSet::new();
+
+                #[cfg(feature = "__rustls_awc_lc_rs")]
+                let provider = rustls::crypto::aws_lc_rs::default_provider();
+                #[cfg(feature = "__rustls_ring")]
+                let provider = rustls::crypto::ring::default_provider();
+
+                let builder = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+                    .with_protocol_versions(rustls::ALL_VERSIONS)
+                    .map_err(|e| VetisError::Startup(StartupError::Tls(e.to_compact_string())))?;
+
                 let cert = tls.cert();
                 let key = tls.key();
 
@@ -43,9 +50,6 @@ impl TlsFactory {
 
                 let key = PrivateKeyDer::try_from(key.to_vec())
                     .map_err(|_| VetisError::tls("Failed to parse private key"))?;
-                let certified_key = CertifiedKey::from_der(chain, key, &provider).map_err(|e| {
-                    VetisError::tls(format_compact!("Failed to create certified key: {}", e))
-                })?;
 
                 let (hostname, _) = hostname
                     .rsplit_once(':')
@@ -57,23 +61,20 @@ impl TlsFactory {
                         .map(From::<&Alpn>::from),
                 );
 
-                resolver
-                    .add(&hostname, certified_key)
-                    .map_err(|e| VetisError::tls(e.to_compact_string()))?;
+                // TODO: Add client verification (mTLS)
+
+                let mut tls_config = builder
+                    .with_no_client_auth()
+                    .with_single_cert(chain, key)
+                    .map_err(|e| VetisError::Tls(e.to_compact_string()))?;
+
+                tls_config.max_early_data_size = 0;
+                tls_config.alpn_protocols = Vec::from_iter(alpns);
+
+                sni_tls_config_map.insert(hostname.to_compact_string(), tls_config.into());
             }
         }
 
-        let builder = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
-            .with_protocol_versions(rustls::ALL_VERSIONS)
-            .map_err(|e| VetisError::Startup(StartupError::Tls(e.to_compact_string())))?;
-
-        // TODO: Add client verification (mTLS)
-
-        let mut tls_config = builder
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(resolver));
-        tls_config.max_early_data_size = 0;
-        tls_config.alpn_protocols = Vec::from_iter(alpns);
-        Ok(tls_config.into())
+        Ok(Self { hosts_tls_config: sni_tls_config_map })
     }
 }

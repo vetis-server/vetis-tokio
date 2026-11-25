@@ -27,7 +27,7 @@ all-features = true
 [features]
 default = [
   "http2",
-  "http3",
+  #"http3",
   "rust-tls"
 ]
 
@@ -75,6 +75,7 @@ rustls = { version = "0.23.46", optional = true, default-features = false, featu
   "tls12",
   "prefer-post-quantum",
 ] }
+serde = "1.0.228"
 tokio = { version = "1.54.1", features = [
   "fs",
   "signal",
@@ -83,6 +84,7 @@ tokio = { version = "1.54.1", features = [
   "rt-multi-thread",
 ], default-features = false }
 tokio-rustls = { version = "0.26.6", optional = true, default-features = false }
+typetag = "0.2.22"
 vetis = { path = "../vetis/vetis", default-features = false, features = ["multi-threaded"] }
 vetis-matchers = { path = "../vetis-matchers" }
 

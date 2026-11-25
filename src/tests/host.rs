@@ -1,5 +1,7 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use crate::{
-    hook::{HandlerHook, handler_fn},
+    hook::{HandlerHookConfig, handler_fn},
     host::Host,
     tests::{CA_CERT, SERVER_CERT, SERVER_KEY, create_hello_handler, create_host},
 };
@@ -13,27 +15,22 @@ async fn test_add_host() -> Result<(), Box<dyn std::error::Error>> {
     let config = HostConfig::builder()
         .hostname("localhost")
         .root_directory("src/tests")
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 8080)
+        .add_hook(
+            HandlerHookConfig::builder()
+                .handler(handler_fn(|_request| async move {
+                    let response = vetis::Response::builder()
+                        .status(StatusCode::OK)
+                        .text("Hello, world!");
+                    Ok(response)
+                }))
+                .build()
+                .unwrap(),
+        )
         .build()
         .unwrap();
 
-    let mut host = Host::new(config).await?;
-    host.add_hook(
-        HandlerHook::builder()
-            .handler(handler_fn(|_request| async move {
-                let response = vetis::Response::builder()
-                    .status(StatusCode::OK)
-                    .text("Hello, world!");
-                Ok(response)
-            }))
-            .build()
-            .unwrap(),
-    );
-
-    assert_eq!(
-        host.config()
-            .hostname(),
-        "localhost"
-    );
+    assert_eq!(config.hostname(), "localhost");
 
     Ok(())
 }
@@ -42,6 +39,7 @@ async fn test_add_host() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_host_tls_and_mutable_config() -> Result<(), Box<dyn std::error::Error>> {
     let config = HostConfig::builder()
         .hostname("before")
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 8080)
         .build()?;
     let mut host = Host::new(config).await?;
     let cert = tokio::fs::read(SERVER_CERT).await?;
@@ -52,6 +50,7 @@ async fn test_host_tls_and_mutable_config() -> Result<(), Box<dyn std::error::Er
 
     *host.config_mut() = HostConfig::builder()
         .hostname("after")
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, 8080)
         .build()?;
     assert_eq!(
         host.config()

@@ -1,12 +1,10 @@
 #![allow(unreachable_code, dead_code)]
-use crate::{
-    hook::{HandlerFn, HandlerHook, handler_fn},
-    host::Host,
-};
+use std::net::{IpAddr, Ipv4Addr};
+
+use crate::hook::{HandlerFn, HandlerHookConfig, handler_fn};
 use http::{StatusCode, Version};
 use vetis::{host::HostConfig, security::TlsConfig};
-use vetis_macros::status_pages;
-use vetis_matchers::request::{PathMatcher, PathMatcherConfig};
+use vetis_matchers::request::PathMatcherConfig;
 
 mod host;
 mod io;
@@ -14,6 +12,7 @@ mod lib;
 mod listener;
 #[cfg(target_os = "linux")]
 mod server;
+#[cfg(feature = "http3")]
 mod service;
 mod tls;
 
@@ -48,41 +47,31 @@ async fn create_host(
     ca: &str,
     cert: &str,
     key: &str,
-) -> Result<Host, Box<dyn std::error::Error>> {
-    let security_config = TlsConfig::builder()
+) -> Result<HostConfig, Box<dyn std::error::Error>> {
+    let tls_config = TlsConfig::builder()
         .ca_file(ca)
         .cert_file(cert)
         .key_file(key)
         .build()?;
 
-    let host_config = HostConfig::builder()
-        .hostname(hostname)
-        .root_directory(".")
-        .protos(&[default_protocol_version()])
-        .tls(security_config)
-        .status_pages(status_pages! {
-            404 @ "files/public/404.html"
-        })
-        .bind_addresses(&[(
-            "0.0.0.0"
-                .parse()
-                .unwrap(),
-            port,
-        )])
-        .build()?;
-
-    let root_path = HandlerHook::builder()
-        .matcher(PathMatcher::new(
+    let root_path = HandlerHookConfig::builder()
+        .matcher(
             PathMatcherConfig::builder()
                 .add_path("/hello*")
                 .build()?,
-        ))
+        )
         .handler(handler)
         .build()?;
 
-    let mut host = Host::new(host_config).await?;
+    let host_config = HostConfig::builder()
+        .hostname(hostname)
+        .root_directory(".")
+        .tls(tls_config)
+        .add_proto(default_protocol_version())
+        .add_status_page(404, "files/public/404.html".into())
+        .add_bind_address(Ipv4Addr::UNSPECIFIED, port)
+        .add_hook(root_path)
+        .build()?;
 
-    host.add_hook(root_path);
-
-    Ok(host)
+    Ok(host_config)
 }

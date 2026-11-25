@@ -1,5 +1,5 @@
 use crate::{
-    hook::{HandlerFn, HandlerHook},
+    hook::{HandlerFn, HandlerHookConfig},
     host::Host,
     service::quic::HttpService,
 };
@@ -8,27 +8,29 @@ use hyper::service::Service;
 use hyper_body_utils::HttpBody;
 use std::{net::SocketAddr, sync::Arc};
 use vetis::{VetisHosts, errors::RuntimeError, host::HostConfig};
-use vetis_matchers::request::{PathMatcher, PathMatcherConfig};
+use vetis_matchers::request::PathMatcherConfig;
 
 async fn create_service(
     handler: HandlerFn,
     default_headers: &[(&str, &str)],
 ) -> Result<HttpService<Host>, Box<dyn std::error::Error>> {
-    let mut config = HostConfig::builder().hostname("localhost");
+    let mut host_config = HostConfig::builder()
+        .hostname("localhost")
+        .add_hook(
+            HandlerHookConfig::builder()
+                .matcher(
+                    PathMatcherConfig::builder()
+                        .add_path("/ok*")
+                        .build()?,
+                )
+                .handler(handler)
+                .build()?,
+        );
     for (name, value) in default_headers {
-        config = config.header(name, value);
+        host_config = host_config.add_default_header(name, value);
     }
-    let mut host = Host::new(config.build()?).await?;
-    host.add_hook(
-        HandlerHook::builder()
-            .matcher(PathMatcher::new(
-                PathMatcherConfig::builder()
-                    .add_path("/ok*")
-                    .build()?,
-            ))
-            .handler(handler)
-            .build()?,
-    );
+
+    let host = Host::new(host_config.build()?).await?;
 
     let hosts = papaya::HashMap::new();
     hosts
