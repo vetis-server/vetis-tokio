@@ -1,16 +1,15 @@
-use crate::{
-    Request,
-    errors::{ContentError, HostError},
-};
+use crate::{Request, errors::HostError};
 use http::{
     HeaderName, HeaderValue, StatusCode,
-    header::{self},
+    header::{self, CONTENT_LENGTH},
 };
 use hyper::{body::Incoming, service::Service};
 use hyper_body_utils::HttpBody;
 use std::net::SocketAddr;
 use vetis::{
-    LogSender, VetisFutureResult, VetisHosts, debug, error, errors::VetisError, info, log::Logger,
+    LogSender, VetisFutureResult, VetisHosts, debug, error,
+    errors::{RuntimeError, VetisError},
+    log::Logger,
 };
 
 /// HttpService is responsible for process HTTP1 and HTTP2 client requests
@@ -47,12 +46,15 @@ where
 
     type Future = VetisFutureResult<'static, Self::Response>;
 
-    fn call(&self, req: http::request::Request<Incoming>) -> Self::Future {
+    fn call(&self, mut req: http::request::Request<Incoming>) -> Self::Future {
         let hosts = self.hosts.clone();
         let logger = self.logger.clone();
-        let client_addr = self
-            .client_addr
-            .clone();
+        req.extensions_mut()
+            .insert(
+                self.client_addr
+                    .ip()
+                    .clone(),
+            );
         let future = async move {
             let Some(hostname) = req
                 .uri()
@@ -80,9 +82,34 @@ where
             let hosts = hosts.pin_owned();
             let host = hosts.get(&hostname);
             if let Some(host) = host {
-                let version = req.version();
-                let method = req.method().clone();
                 let uri = req.uri().clone();
+                if let Some(root_directory) = host
+                    .config()
+                    .root_directory()
+                {
+                    req.extensions_mut()
+                        .insert(root_directory.clone());
+                }
+
+                let content_length = req
+                    .headers()
+                    .get(CONTENT_LENGTH);
+                if let Some(length) = content_length
+                    && let Ok(length) = length
+                        .to_str()
+                        .unwrap_or("0")
+                        .parse::<i32>()
+                    && length
+                        > host
+                            .config()
+                            .max_request_size()
+                {
+                    let response = crate::Response::builder()
+                        .status(StatusCode::PAYLOAD_TOO_LARGE)
+                        .empty()
+                        .into_inner();
+                    return Ok(response);
+                }
 
                 if let Some(scheme) = uri.scheme_str()
                     && (scheme.to_lowercase() == "http" || scheme.to_lowercase() == "ws")
@@ -99,17 +126,15 @@ where
                             .enable_hsts()
                     {
                         let target = if let Some(query) = uri.query() {
-                            format!("{scheme}://{hostname}{}{}", uri.path(), query)
+                            format!("{scheme}s://{hostname}{}{}", uri.path(), query)
                         } else {
-                            format!("{scheme}://{hostname}{}", uri.path())
+                            format!("{scheme}s://{hostname}{}", uri.path())
                         };
 
                         // TODO: Handle HSTS via Strict-Transport-Security?
 
                         let header_value = HeaderValue::from_str(&target).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
                         let response = crate::Response::builder()
                             .status(StatusCode::PERMANENT_REDIRECT)
@@ -135,15 +160,11 @@ where
                 if let Some(default_headers) = default_headers {
                     for (key, value) in default_headers.iter() {
                         let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
 
                         let header_value = HeaderValue::from_str(value).map_err(|e| {
-                            VetisError::Host(HostError::Content(ContentError::ServerError(
-                                e.to_string(),
-                            )))
+                            VetisError::Host(HostError::Runtime(RuntimeError::new(&e.to_string())))
                         })?;
 
                         response
@@ -152,6 +173,7 @@ where
                     }
                 }
 
+                /*
                 let message = if let Some(query) = uri.query() {
                     format!(
                         "{} {} {}?{} {:?} {}",
@@ -175,6 +197,7 @@ where
 
                 info!(logger, target: "vetis", "{}", message);
                 info!(logger, target: &hostname, "{}", message);
+                */
 
                 Ok::<http::Response<HttpBody>, VetisError>(response)
             } else {

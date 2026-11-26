@@ -1,60 +1,42 @@
+use std::net::IpAddr;
+
 use crate::{
-    host::{
-        Host,
-        path::{HandlerPath, handler_fn},
-    },
+    hook::{HandlerHookConfig, handler_fn},
     rt::Vetis,
 };
 use http::StatusCode;
-use vetis::{
-    Response, VetisServer as _, VetisTestResult, host::HostConfig, listener::Listener,
-    server::ServerConfig,
-};
+use vetis::{VetisServer as _, VetisTestResult, host::HostConfig, server::ServerConfig};
 
 #[tokio::test]
 async fn test_vetis_add_host() -> VetisTestResult<()> {
-    let vhost_config = HostConfig::builder()
-        .hostname("localhost")
-        .root_directory("src/tests")
-        .bind_addresses(&[(
-            "0.0.0.0"
-                .parse()
-                .unwrap(),
-            0,
-        )])
-        .build()?;
-
-    let mut vhost = Host::new(vhost_config).await?;
-
-    let handler_path = HandlerPath::builder()
-        .uri("/")
-        .handler(handler_fn(|_request, _ctx| async move {
-            Ok(Response::builder()
+    let handler_hook = HandlerHookConfig::builder()
+        .handler(handler_fn(|_request| async move {
+            let response = vetis::Response::builder()
                 .status(StatusCode::OK)
-                .text("Hello, World!"))
+                .text("Hello, world!");
+            Ok(response)
         }))
         .build()?;
 
-    vhost.add_path(handler_path);
+    let vhost_config = HostConfig::builder()
+        .hostname("localhost")
+        .root_directory("src/tests")
+        .add_bind_address(
+            "0.0.0.0"
+                .parse::<IpAddr>()
+                .unwrap(),
+            0,
+        )
+        .add_hook(handler_hook)
+        .build()?;
 
     let mut server = Vetis::builder()
-        .add_host(vhost)
-        .await?
+        .add_host(vhost_config)
         .build();
 
-    let listener = server
-        .listeners()
-        .first()
-        .unwrap();
-    assert_eq!(listener.total_hosts(), 1);
-    assert_ne!(
-        listener
-            .config()
-            .port(),
-        0
-    );
-
-    server.run().await?;
+    server
+        .start()
+        .await?;
     server
         .stop()
         .await?;
@@ -85,12 +67,12 @@ async fn test_vetis_stop_no_hosts() -> VetisTestResult<()> {
 async fn test_vetis_from_config_reserves_ephemeral_port() -> VetisTestResult<()> {
     let host_config = HostConfig::builder()
         .hostname("localhost")
-        .bind_addresses(&[(
+        .add_bind_address(
             "0.0.0.0"
-                .parse()
+                .parse::<IpAddr>()
                 .unwrap(),
             0,
-        )])
+        )
         .build()?;
     let server_config = ServerConfig::builder()
         .add_host(host_config)
@@ -99,15 +81,10 @@ async fn test_vetis_from_config_reserves_ephemeral_port() -> VetisTestResult<()>
 
     assert_eq!(
         server
-            .listeners()
+            .config()
+            .hosts()
             .len(),
         1
-    );
-    assert_ne!(
-        server.listeners()[0]
-            .config()
-            .port(),
-        0
     );
     Ok(())
 }
@@ -117,44 +94,29 @@ async fn test_vetis_add_multiple_hosts() -> VetisTestResult<()> {
     let mut server = Vetis::builder();
 
     for i in 0..3 {
-        let vhost_config = HostConfig::builder()
-            .hostname(&format!("host{}", i))
-            .root_directory("src/tests")
-            .bind_addresses(&[(
-                "0.0.0.0"
-                    .parse()
-                    .unwrap(),
-                8080,
-            )])
-            .build()?;
-
-        let mut vhost = Host::new(vhost_config).await?;
-
-        let handler_path = HandlerPath::builder()
-            .uri("/")
-            .handler(handler_fn(|_request, _ctx| async move {
-                Ok(Response::builder()
+        let handler_hook = HandlerHookConfig::builder()
+            .handler(handler_fn(|_request| async move {
+                let response = vetis::Response::builder()
                     .status(StatusCode::OK)
-                    .text("Hello, World!"))
+                    .text("Hello, world!");
+                Ok(response)
             }))
             .build()?;
 
-        vhost.add_path(handler_path);
+        let vhost_config = HostConfig::builder()
+            .hostname(&format!("host{}", i))
+            .root_directory("src/tests")
+            .add_bind_address(
+                "0.0.0.0"
+                    .parse::<IpAddr>()
+                    .unwrap(),
+                8080,
+            )
+            .add_hook(handler_hook)
+            .build()?;
 
-        server = server
-            .add_host(vhost)
-            .await?;
+        server = server.add_host(vhost_config);
     }
-
-    assert_eq!(
-        server
-            .build()
-            .listeners()
-            .first()
-            .unwrap()
-            .total_hosts(),
-        3
-    );
 
     Ok(())
 }

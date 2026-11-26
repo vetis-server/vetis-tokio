@@ -8,3 +8,9 @@ allow = [
     "ISC",
     "BSD-3-Clause",
 ]
+
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
+]

@@ -1,8 +1,8 @@
 use crate::{
-    host::path::handler_fn,
+    hook::{HandlerHookConfig, handler_fn},
+    host::Host,
     tests::{
-        CA_CERT, SERVER_CERT, SERVER_KEY, create_hello_handler, create_host,
-        default_protocol_version,
+        CA_CERT, SERVER_CERT, SERVER_KEY, create_hello_hook, create_host, default_protocol_version,
     },
 };
 use caramelo::{expect, matchers::eq};
@@ -16,9 +16,10 @@ use http_body_util::BodyExt;
 use rand::random_range;
 use vetis::{
     VetisServer as _,
-    errors::{ContentError, HostError, VetisError},
+    errors::{HostError, RuntimeError, VetisError},
     host::{Host as _, HostConfig},
 };
+use vetis_matchers::request::PathMatcherConfig;
 
 #[tokio::test]
 async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,17 +27,9 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut server = crate::Vetis::builder()
         .add_host(
-            create_host(
-                create_hello_handler(),
-                "localhost",
-                port,
-                CA_CERT,
-                SERVER_CERT,
-                SERVER_KEY,
-            )
-            .await?,
+            create_host(create_hello_hook(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
+                .await?,
         )
-        .await?
         .build();
 
     server
@@ -67,9 +60,10 @@ async fn test_handler() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn test_missing_path() -> Result<(), Box<dyn std::error::Error>> {
     let port = random_range(9000..=20000);
-    let host =
-        create_host(create_hello_handler(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
+    let host_config =
+        create_host(create_hello_hook(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
             .await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get(format!("https://localhost:{}/not-found", port)).body(HttpBody::empty())?;
     let request = vetis::Request::new(original_request);
@@ -83,9 +77,9 @@ async fn test_missing_path() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_handler_path_matches_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    let host =
-        create_host(create_hello_handler(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY)
-            .await?;
+    let host_config =
+        create_host(create_hello_hook(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get("https://localhost:0/hello/child").body(HttpBody::empty())?;
     let response = host
@@ -100,9 +94,10 @@ async fn test_handler_path_matches_descendants() -> Result<(), Box<dyn std::erro
 #[tokio::test]
 async fn test_forbidden_traversal() -> Result<(), Box<dyn std::error::Error>> {
     let port = random_range(9000..=20000);
-    let host =
-        create_host(create_hello_handler(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
+    let host_config =
+        create_host(create_hello_hook(), "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY)
             .await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get(format!("https://localhost:{}/../hello", port)).body(HttpBody::empty())?;
     let request = vetis::Request::new(original_request);
@@ -116,12 +111,32 @@ async fn test_forbidden_traversal() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_auth_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Auth("Nothing".into())))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("Unauthorized").with_status_code(StatusCode::UNAUTHORIZED),
+        )))
     });
 
     let port = random_range(9000..=20000);
-    let host = create_host(handler, "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host_config = create_host(
+        HandlerHookConfig::builder()
+            .matcher(
+                PathMatcherConfig::builder()
+                    .add_path("/hello*")
+                    .build()
+                    .unwrap(),
+            )
+            .handler(handler)
+            .build()
+            .unwrap(),
+        "localhost",
+        port,
+        CA_CERT,
+        SERVER_CERT,
+        SERVER_KEY,
+    )
+    .await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get(format!("https://localhost:{}/hello", port)).body(HttpBody::empty())?;
     let request = vetis::Request::new(original_request);
@@ -135,12 +150,32 @@ async fn test_auth_error() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_proxy_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Proxy("Nothing".into())))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("Nothing").with_status_code(StatusCode::BAD_GATEWAY),
+        )))
     });
 
     let port = random_range(9000..=20000);
-    let host = create_host(handler, "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host_config = create_host(
+        HandlerHookConfig::builder()
+            .matcher(
+                PathMatcherConfig::builder()
+                    .add_path("/hello*")
+                    .build()
+                    .unwrap(),
+            )
+            .handler(handler)
+            .build()
+            .unwrap(),
+        "localhost",
+        port,
+        CA_CERT,
+        SERVER_CERT,
+        SERVER_KEY,
+    )
+    .await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get(format!("https://localhost:{}/hello", port)).body(HttpBody::empty())?;
     let request = vetis::Request::new(original_request);
@@ -154,12 +189,32 @@ async fn test_proxy_error() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_content_error() -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(|_request, _ctx| async move {
-        Err(VetisError::Host(HostError::Content(ContentError::Forbidden)))
+    let handler = handler_fn(|_request| async move {
+        Err(VetisError::Host(HostError::Runtime(
+            RuntimeError::new("some message").with_status_code(StatusCode::FORBIDDEN),
+        )))
     });
 
     let port = random_range(9000..=20000);
-    let host = create_host(handler, "localhost", port, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host_config = create_host(
+        HandlerHookConfig::builder()
+            .matcher(
+                PathMatcherConfig::builder()
+                    .add_path("/hello*")
+                    .build()
+                    .unwrap(),
+            )
+            .handler(handler)
+            .build()
+            .unwrap(),
+        "localhost",
+        port,
+        CA_CERT,
+        SERVER_CERT,
+        SERVER_KEY,
+    )
+    .await?;
+    let host = Host::new(host_config).await?;
     let original_request =
         Request::get(format!("https://localhost:{}/hello", port)).body(HttpBody::empty())?;
     let request = vetis::Request::new(original_request);
@@ -172,15 +227,33 @@ async fn test_content_error() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn assert_content_error_status(
-    error: ContentError,
+    error: RuntimeError,
     expected_status: StatusCode,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let handler = handler_fn(move |_request, _ctx| {
+    let handler = handler_fn(move |_request| {
         let error = error.clone();
-        async move { Err(VetisError::Host(HostError::Content(error))) }
+        async move { Err(VetisError::Host(HostError::Runtime(error))) }
     });
 
-    let host = create_host(handler, "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host_config = create_host(
+        HandlerHookConfig::builder()
+            .matcher(
+                PathMatcherConfig::builder()
+                    .add_path("/hello*")
+                    .build()
+                    .unwrap(),
+            )
+            .handler(handler)
+            .build()
+            .unwrap(),
+        "localhost",
+        0,
+        CA_CERT,
+        SERVER_CERT,
+        SERVER_KEY,
+    )
+    .await?;
+    let host = Host::new(host_config).await?;
     let original_request = Request::get("https://localhost:0/hello").body(HttpBody::empty())?;
     let response = host
         .route(vetis::Request::new(original_request), None)
@@ -193,13 +266,9 @@ async fn assert_content_error_status(
 
 #[tokio::test]
 async fn test_content_error_status_mappings() -> Result<(), Box<dyn std::error::Error>> {
-    for (error, expected_status) in [
-        (ContentError::Forbidden, StatusCode::FORBIDDEN),
-        (ContentError::NotFound("missing".into()), StatusCode::NOT_FOUND),
-        (ContentError::InvalidMetadata("invalid".into()), StatusCode::INTERNAL_SERVER_ERROR),
-        (ContentError::InvalidRange("invalid".into()), StatusCode::RANGE_NOT_SATISFIABLE),
-        (ContentError::ServerError("failed".into()), StatusCode::INTERNAL_SERVER_ERROR),
-    ] {
+    for (error, expected_status) in
+        [(RuntimeError::new("some message"), StatusCode::INTERNAL_SERVER_ERROR)]
+    {
         assert_content_error_status(error, expected_status).await?;
     }
 
@@ -208,11 +277,14 @@ async fn test_content_error_status_mappings() -> Result<(), Box<dyn std::error::
 
 #[tokio::test]
 async fn test_status_page_uses_configured_file() -> Result<(), Box<dyn std::error::Error>> {
-    let host =
-        create_host(create_hello_handler(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY)
-            .await?;
+    let host_config =
+        create_host(create_hello_hook(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host = Host::new(host_config).await?;
     let response = host
-        .serve_status_page(StatusCode::NOT_FOUND.as_u16(), None)
+        .serve_status_page(
+            RuntimeError::new("some message").with_status_code(StatusCode::NOT_FOUND),
+            None,
+        )
         .await?
         .into_inner();
 
@@ -230,11 +302,11 @@ async fn test_status_page_uses_configured_file() -> Result<(), Box<dyn std::erro
 
 #[tokio::test]
 async fn test_status_page_falls_back_to_reason() -> Result<(), Box<dyn std::error::Error>> {
-    let host =
-        create_host(create_hello_handler(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY)
-            .await?;
+    let host_config =
+        create_host(create_hello_hook(), "localhost", 0, CA_CERT, SERVER_CERT, SERVER_KEY).await?;
+    let host = Host::new(host_config).await?;
     let response = host
-        .serve_status_page(StatusCode::INTERNAL_SERVER_ERROR.as_u16(), None)
+        .serve_status_page(RuntimeError::new("some message"), None)
         .await?
         .into_inner();
 
@@ -259,27 +331,13 @@ async fn test_status_page_without_configuration() -> Result<(), Box<dyn std::err
     )
     .await?;
     let response = host
-        .serve_status_page(StatusCode::NOT_FOUND.as_u16(), None)
+        .serve_status_page(
+            RuntimeError::new("some message").with_status_code(StatusCode::NOT_FOUND),
+            None,
+        )
         .await?
         .into_inner();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_status_page_rejects_invalid_status() -> Result<(), Box<dyn std::error::Error>> {
-    let host = crate::host::Host::new(
-        HostConfig::builder()
-            .hostname("localhost")
-            .build()?,
-    )
-    .await?;
-
-    assert!(
-        host.serve_status_page(99, None)
-            .await
-            .is_err()
-    );
     Ok(())
 }
