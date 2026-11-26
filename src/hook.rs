@@ -1,9 +1,8 @@
 //! Hook module
-use std::sync::Arc;
-
 use cel::Context;
 use hyper_body_utils::HttpBody;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use vetis::{
     Request, Response, VetisFutureResult, VetisHook, VetisResult,
     errors::VetisError,

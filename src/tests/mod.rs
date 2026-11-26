@@ -6,6 +6,7 @@ use http::{StatusCode, Version};
 use vetis::{host::HostConfig, security::TlsConfig};
 use vetis_matchers::request::PathMatcherConfig;
 
+mod hook;
 mod host;
 mod io;
 mod lib;
